@@ -1822,6 +1822,7 @@ def test_path_modify_schema():
     class Model(BaseModel):
         path1: Path
         path2: MyPath
+        path3: List[MyPath]
 
     assert Model.schema() == {
         'title': 'Model',
@@ -1829,14 +1830,18 @@ def test_path_modify_schema():
         'properties': {
             'path1': {'title': 'Path1', 'type': 'string', 'format': 'path'},
             'path2': {'title': 'Path2', 'type': 'string', 'format': 'path', 'foobar': 123},
+            'path3': {'title': 'Path3', 'type': 'array', 'items': {'type': 'string', 'format': 'path', 'foobar': 123}},
         },
-        'required': ['path1', 'path2'],
+        'required': ['path1', 'path2', 'path3'],
     }
 
 
 def test_frozen_set():
     class Model(BaseModel):
         a: FrozenSet[int] = frozenset({1, 2, 3})
+        b: FrozenSet = frozenset({1, 2, 3})
+        c: frozenset = frozenset({1, 2, 3})
+        d: frozenset = ...
 
     assert Model.schema() == {
         'title': 'Model',
@@ -1848,8 +1853,12 @@ def test_frozen_set():
                 'type': 'array',
                 'items': {'type': 'integer'},
                 'uniqueItems': True,
-            }
+            },
+            'b': {'title': 'B', 'default': frozenset({1, 2, 3}), 'type': 'array', 'items': {}, 'uniqueItems': True},
+            'c': {'title': 'C', 'default': frozenset({1, 2, 3}), 'type': 'array', 'items': {}, 'uniqueItems': True},
+            'd': {'title': 'D', 'type': 'array', 'items': {}, 'uniqueItems': True},
         },
+        'required': ['d'],
     }
 
 

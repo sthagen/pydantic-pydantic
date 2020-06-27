@@ -37,20 +37,20 @@ if no `ValidationError` is raised, you know the resulting model instance is vali
 ```py
 assert user.id == 123
 ```
-fields of a model can be accessed as normal attributes of the user object
-the string '123' has been cast to an int as per the field type
+Fields of a model can be accessed as normal attributes of the user object.
+The string '123' has been cast to an int as per the field type
 ```py
 assert user.name == 'Jane Doe'
 ```
-name wasn't set when user was initialised, so it has the default value
+`name` wasn't set when user was initialised, so it has the default value
 ```py
 assert user.__fields_set__ == {'id'}
 ```
-the fields which were supplied when user was initialised:
+The fields which were supplied when user was initialised:
 ```py
 assert user.dict() == dict(user) == {'id': 123, 'name': 'Jane Doe'}
 ```
-either `.dict()` or `dict(user)` will provide a dict of fields, but `.dict()` can take numerous other arguments.
+Either `.dict()` or `dict(user)` will provide a dict of fields, but `.dict()` can take numerous other arguments.
 ```py
 user.id = 321
 assert user.id == 321
@@ -131,6 +131,22 @@ The example here uses SQLAlchemy, but the same approach should work for any ORM.
 {!.tmp_examples/models_orm_mode.py!}
 ```
 _(This script is complete, it should run "as is")_
+
+### Reserved names
+
+You may want to name a Column after a reserved SQLAlchemy field. In that case, Field aliases will be
+convenient:
+
+```py
+{!.tmp_examples/models_orm_mode_reserved_name.py!}
+```
+_(This script is complete, it should run "as is")_
+
+!!! note
+    The example above works because aliases have priority over field names for
+    field population. Accessing `SQLModel`'s `metadata` attribute would lead to a `ValidationError`.
+
+### Recursive ORM models
 
 ORM instances will be parsed with `from_orm` recursively as well as at the top level.
 
@@ -264,6 +280,10 @@ For example, in the example above, if `_fields_set` was not provided,
 ## Generic Models
 
 Pydantic supports the creation of generic models to make it easier to reuse a common model structure.
+
+!!! warning
+    Generic models are only supported with python `>=3.7`, this is because of numerous subtle changes in how
+    generics are implemented between python 3.6 and python 3.7.
 
 In order to declare a generic model, you perform the following steps:
 
@@ -491,6 +511,11 @@ Example of usage:
 _(This script is complete, it should run "as is")_
 
 Where `Field` refers to the [field function](schema.md#field-customisation).
+
+!!! warning
+    The `default_factory` expects the field type to be set.
+    Moreover if you want to validate default values with `validate_all`,
+    *pydantic* will need to call the `default_factory`, which could lead to side effects!
 
 ## Parsing data into a specified type
 

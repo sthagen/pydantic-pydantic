@@ -1,8 +1,11 @@
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Set, Union
+from typing import TYPE_CHECKING, Any, Callable, Set, Tuple, Type, Union
 
-from .typing import AnyType, display_as_type
+from .typing import display_as_type
+
+if TYPE_CHECKING:
+    from .typing import DictStrAny
 
 # explicitly state exports to avoid "from .errors import *" also importing Decimal, Path etc.
 __all__ = (
@@ -91,6 +94,17 @@ __all__ = (
 )
 
 
+def cls_kwargs(cls: Type['PydanticErrorMixin'], ctx: 'DictStrAny') -> 'PydanticErrorMixin':
+    """
+    For built-in exceptions like ValueError or TypeError, we need to implement
+    __reduce__ to override the default behaviour (instead of __getstate__/__setstate__)
+    By default pickle protocol 2 calls `cls.__new__(cls, *args)`.
+    Since we only use kwargs, we need a little constructor to change that.
+    Note: the callable can't be a lambda as pickle looks in the namespace to find it
+    """
+    return cls(**ctx)
+
+
 class PydanticErrorMixin:
     code: str
     msg_template: str
@@ -100,6 +114,9 @@ class PydanticErrorMixin:
 
     def __str__(self) -> str:
         return self.msg_template.format(**self.__dict__)
+
+    def __reduce__(self) -> Tuple[Callable[..., 'PydanticErrorMixin'], Tuple[Type['PydanticErrorMixin'], 'DictStrAny']]:
+        return cls_kwargs, (self.__class__, self.__dict__)
 
 
 class PydanticTypeError(PydanticErrorMixin, TypeError):
@@ -413,7 +430,7 @@ class ArbitraryTypeError(PydanticTypeError):
     code = 'arbitrary_type'
     msg_template = 'instance of {expected_arbitrary_type} expected'
 
-    def __init__(self, *, expected_arbitrary_type: AnyType) -> None:
+    def __init__(self, *, expected_arbitrary_type: Type[Any]) -> None:
         super().__init__(expected_arbitrary_type=display_as_type(expected_arbitrary_type))
 
 
@@ -426,7 +443,7 @@ class SubclassError(PydanticTypeError):
     code = 'subclass'
     msg_template = 'subclass of {expected_class} expected'
 
-    def __init__(self, *, expected_class: AnyType) -> None:
+    def __init__(self, *, expected_class: Type[Any]) -> None:
         super().__init__(expected_class=display_as_type(expected_class))
 
 
