@@ -1030,13 +1030,19 @@ def test_model_export_nested_list():
 
     with pytest.raises(TypeError, match='expected integer keys'):
         m.dict(exclude={'foos': {'a'}})
+    with pytest.raises(TypeError, match='expected integer keys'):
+        m.dict(exclude={'foos': {0: ..., 'a': ...}})
+    with pytest.raises(TypeError, match='Unexpected type'):
+        m.dict(exclude={'foos': {0: 1}})
+    with pytest.raises(TypeError, match='Unexpected type'):
+        m.dict(exclude={'foos': {'__all__': 1}})
 
     assert m.dict(exclude={'foos': {0: {'b'}, '__all__': {'a'}}}) == {'c': 3, 'foos': [{}, {'b': 4}]}
     assert m.dict(exclude={'foos': {'__all__': {'a'}}}) == {'c': 3, 'foos': [{'b': 2}, {'b': 4}]}
     assert m.dict(exclude={'foos': {'__all__'}}) == {'c': 3, 'foos': []}
 
     with pytest.raises(ValueError, match='set with keyword "__all__" must not contain other elements'):
-        m.dict(exclude={'foos': {'a', '__all__'}})
+        m.dict(exclude={'foos': {1, '__all__'}})
 
 
 def test_model_export_dict_exclusion():
@@ -1166,6 +1172,36 @@ def test_default_factory_called_once_2():
     assert m1.id == 1
     m2 = MyModel()
     assert m2.id == 2
+
+
+def test_default_factory_validate_children():
+    class Child(BaseModel):
+        x: int
+
+    class Parent(BaseModel):
+        children: List[Child] = Field(default_factory=list)
+
+    Parent(children=[{'x': 1}, {'x': 2}])
+    with pytest.raises(ValidationError) as exc_info:
+        Parent(children=[{'x': 1}, {'y': 2}])
+
+    assert exc_info.value.errors() == [
+        {'loc': ('children', 1, 'x'), 'msg': 'field required', 'type': 'value_error.missing'},
+    ]
+
+
+def test_default_factory_parse():
+    class Inner(BaseModel):
+        val: int = Field(0)
+
+    class Outer(BaseModel):
+        inner_1: Inner = Field(default_factory=Inner)
+        inner_2: Inner = Field(Inner())
+
+    default = Outer().dict()
+    parsed = Outer.parse_obj(default)
+    assert parsed.dict() == {'inner_1': {'val': 0}, 'inner_2': {'val': 0}}
+    assert repr(parsed) == 'Outer(inner_1=Inner(val=0), inner_2=Inner(val=0))'
 
 
 @pytest.mark.skipif(sys.version_info < (3, 7), reason='field constraints are set but not enforced with python 3.6')

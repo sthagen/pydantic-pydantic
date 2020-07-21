@@ -341,8 +341,22 @@ class ModelField(Representation):
         e.g. calling it it multiple times may modify the field and configure it incorrectly.
         """
 
-        # To prevent side effects by calling the `default_factory` for nothing, we only call it
-        # when we want to validate the default value i.e. when `validate_all` is set to True.
+        self._set_default_and_type()
+        self._type_analysis()
+        if self.required is Undefined:
+            self.required = True
+            self.field_info.default = Required
+        if self.default is Undefined and self.default_factory is None:
+            self.default = None
+        self.populate_validators()
+
+    def _set_default_and_type(self) -> None:
+        """
+        Set the default value, infer the type if needed and check if `None` value is valid.
+
+        Note: to prevent side effects by calling the `default_factory` for nothing, we only call it
+        when we want to validate the default value i.e. when `validate_all` is set to True.
+        """
         if self.default_factory is not None:
             if self.type_ is None:
                 raise errors_.ConfigError(
@@ -367,14 +381,6 @@ class ModelField(Representation):
 
         if self.required is False and default_value is None:
             self.allow_none = True
-
-        self._type_analysis()
-        if self.required is Undefined:
-            self.required = True
-            self.field_info.default = Required
-        if self.default is Undefined and self.default_factory is None:
-            self.default = None
-        self.populate_validators()
 
     def _type_analysis(self) -> None:  # noqa: C901 (ignore complexity)
         # typing interface is horrible, we have to do some ugly checks
@@ -451,15 +457,19 @@ class ModelField(Representation):
             get_validators = getattr(self.type_, '__get_validators__', None)
             if get_validators:
                 self.class_validators.update(
-                    {
-                        f'list_{i}': Validator(validator, pre=True, always=True)
-                        for i, validator in enumerate(get_validators())
-                    }
+                    {f'list_{i}': Validator(validator, pre=True) for i, validator in enumerate(get_validators())}
                 )
 
             self.type_ = self.type_.__args__[0]
             self.shape = SHAPE_LIST
         elif issubclass(origin, Set):
+            # Create self validators
+            get_validators = getattr(self.type_, '__get_validators__', None)
+            if get_validators:
+                self.class_validators.update(
+                    {f'set_{i}': Validator(validator, pre=True) for i, validator in enumerate(get_validators())}
+                )
+
             self.type_ = self.type_.__args__[0]
             self.shape = SHAPE_SET
         elif issubclass(origin, FrozenSet):
