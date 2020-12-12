@@ -1,8 +1,10 @@
 import warnings
+from collections import deque
 from collections.abc import Iterable as CollectionsIterable
 from typing import (
     TYPE_CHECKING,
     Any,
+    Deque,
     Dict,
     FrozenSet,
     Generator,
@@ -207,6 +209,7 @@ SHAPE_SEQUENCE = 7
 SHAPE_FROZENSET = 8
 SHAPE_ITERABLE = 9
 SHAPE_GENERIC = 10
+SHAPE_DEQUE = 11
 SHAPE_NAME_LOOKUP = {
     SHAPE_LIST: 'List[{}]',
     SHAPE_SET: 'Set[{}]',
@@ -214,6 +217,7 @@ SHAPE_NAME_LOOKUP = {
     SHAPE_SEQUENCE: 'Sequence[{}]',
     SHAPE_FROZENSET: 'FrozenSet[{}]',
     SHAPE_ITERABLE: 'Iterable[{}]',
+    SHAPE_DEQUE: 'Deque[{}]',
 }
 
 
@@ -303,7 +307,7 @@ class ModelField(Representation):
         required: 'BoolUndefined' = Undefined
         if value is Required:
             required = True
-            value = None
+            value = Ellipsis
         elif value is not Undefined:
             required = False
         field_info.alias = field_info.alias or field_info_from_config.get('alias')
@@ -342,7 +346,6 @@ class ModelField(Representation):
         Note: this method is **not** idempotent (because _type_analysis is not idempotent),
         e.g. calling it it multiple times may modify the field and configure it incorrectly.
         """
-
         self._set_default_and_type()
         if self.type_.__class__ == ForwardRef:
             # self.type_ is currently a ForwardRef and there's nothing we can do now,
@@ -444,14 +447,19 @@ class ModelField(Representation):
             return
 
         if issubclass(origin, Tuple):  # type: ignore
-            self.shape = SHAPE_TUPLE
-            self.sub_fields = []
-            for i, t in enumerate(get_args(self.type_)):
-                if t is Ellipsis:
-                    self.type_ = get_args(self.type_)[0]
-                    self.shape = SHAPE_TUPLE_ELLIPSIS
-                    return
-                self.sub_fields.append(self._create_sub_type(t, f'{self.name}_{i}'))
+            # origin == Tuple without item type
+            if not get_args(self.type_):
+                self.type_ = Any
+                self.shape = SHAPE_TUPLE_ELLIPSIS
+            else:
+                self.shape = SHAPE_TUPLE
+                self.sub_fields = []
+                for i, t in enumerate(get_args(self.type_)):
+                    if t is Ellipsis:
+                        self.type_ = get_args(self.type_)[0]
+                        self.shape = SHAPE_TUPLE_ELLIPSIS
+                        return
+                    self.sub_fields.append(self._create_sub_type(t, f'{self.name}_{i}'))
             return
 
         if issubclass(origin, List):
@@ -477,6 +485,9 @@ class ModelField(Representation):
         elif issubclass(origin, FrozenSet):
             self.type_ = get_args(self.type_)[0]
             self.shape = SHAPE_FROZENSET
+        elif issubclass(origin, Deque):
+            self.type_ = get_args(self.type_)[0]
+            self.shape = SHAPE_DEQUE
         elif issubclass(origin, Sequence):
             self.type_ = get_args(self.type_)[0]
             self.shape = SHAPE_SEQUENCE
@@ -598,6 +609,8 @@ class ModelField(Representation):
             e: errors_.PydanticTypeError
             if self.shape == SHAPE_LIST:
                 e = errors_.ListError()
+            elif self.shape in (SHAPE_TUPLE, SHAPE_TUPLE_ELLIPSIS):
+                e = errors_.TupleError()
             elif self.shape == SHAPE_SET:
                 e = errors_.SetError()
             elif self.shape == SHAPE_FROZENSET:
@@ -620,7 +633,7 @@ class ModelField(Representation):
         if errors:
             return v, errors
 
-        converted: Union[List[Any], Set[Any], FrozenSet[Any], Tuple[Any, ...], Iterator[Any]] = result
+        converted: Union[List[Any], Set[Any], FrozenSet[Any], Tuple[Any, ...], Iterator[Any], Deque[Any]] = result
 
         if self.shape == SHAPE_SET:
             converted = set(result)
@@ -628,6 +641,8 @@ class ModelField(Representation):
             converted = frozenset(result)
         elif self.shape == SHAPE_TUPLE_ELLIPSIS:
             converted = tuple(result)
+        elif self.shape == SHAPE_DEQUE:
+            converted = deque(result)
         elif self.shape == SHAPE_SEQUENCE:
             if isinstance(v, tuple):
                 converted = tuple(result)
@@ -635,6 +650,8 @@ class ModelField(Representation):
                 converted = set(result)
             elif isinstance(v, Generator):
                 converted = iter(result)
+            elif isinstance(v, deque):
+                converted = deque(result)
         return converted, None
 
     def _validate_iterable(
@@ -786,3 +803,45 @@ class ModelField(Representation):
         if self.alt_alias:
             args.append(('alias', self.alias))
         return args
+
+
+class ModelPrivateAttr(Representation):
+    __slots__ = ('default', 'default_factory')
+
+    def __init__(self, default: Any = Undefined, *, default_factory: Optional[NoArgAnyCallable] = None) -> None:
+        self.default = default
+        self.default_factory = default_factory
+
+    def get_default(self) -> Any:
+        return smart_deepcopy(self.default) if self.default_factory is None else self.default_factory()
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, self.__class__) and (self.default, self.default_factory) == (
+            other.default,
+            other.default_factory,
+        )
+
+
+def PrivateAttr(
+    default: Any = Undefined,
+    *,
+    default_factory: Optional[NoArgAnyCallable] = None,
+) -> Any:
+    """
+    Indicates that attribute is only used internally and never mixed with regular fields.
+
+    Types or values of private attrs are not checked by pydantic and it's up to you to keep them relevant.
+
+    Private attrs are stored in model __slots__.
+
+    :param default: the attribute’s default value
+    :param default_factory: callable that will be called when a default value is needed for this attribute
+      If both `default` and `default_factory` are set, an error is raised.
+    """
+    if default is not Undefined and default_factory is not None:
+        raise ValueError('cannot specify both default and default_factory')
+
+    return ModelPrivateAttr(
+        default,
+        default_factory=default_factory,
+    )

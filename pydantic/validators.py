@@ -1,5 +1,5 @@
 import re
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Hashable
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, DecimalException
@@ -10,6 +10,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Deque,
     Dict,
     FrozenSet,
     Generator,
@@ -77,6 +78,15 @@ def bytes_validator(v: Any) -> bytes:
         return v.encode()
     elif isinstance(v, (float, int, Decimal)):
         return str(v).encode()
+    else:
+        raise errors.BytesError()
+
+
+def strict_bytes_validator(v: Any) -> Union[bytes]:
+    if isinstance(v, bytes):
+        return v
+    elif isinstance(v, bytearray):
+        return bytes(v)
     else:
         raise errors.BytesError()
 
@@ -243,6 +253,15 @@ def frozenset_validator(v: Any) -> FrozenSet[Any]:
         return frozenset(v)
     else:
         raise errors.FrozenSetError()
+
+
+def deque_validator(v: Any) -> Deque[Any]:
+    if isinstance(v, deque):
+        return v
+    elif sequence_like(v):
+        return deque(v)
+    else:
+        raise errors.DequeError()
 
 
 def enum_member_validator(v: Any, field: 'ModelField', config: 'BaseConfig') -> Enum:
@@ -548,6 +567,7 @@ _VALIDATORS: List[Tuple[Type[Any], List[Any]]] = [
     (tuple, [tuple_validator]),
     (set, [set_validator]),
     (frozenset, [frozenset_validator]),
+    (deque, [deque_validator]),
     (UUID, [uuid_validator]),
     (Decimal, [decimal_validator]),
     (IPv4Interface, [ip_v4_interface_validator]),
@@ -562,6 +582,8 @@ _VALIDATORS: List[Tuple[Type[Any], List[Any]]] = [
 def find_validators(  # noqa: C901 (ignore complexity)
     type_: Type[Any], config: Type['BaseConfig']
 ) -> Generator[AnyCallable, None, None]:
+    from .dataclasses import is_builtin_dataclass, make_dataclass_validator
+
     if type_ is Any:
         return
     type_type = type_.__class__
@@ -578,6 +600,9 @@ def find_validators(  # noqa: C901 (ignore complexity)
         return
     if is_literal_type(type_):
         yield make_literal_validator(type_)
+        return
+    if is_builtin_dataclass(type_):
+        yield from make_dataclass_validator(type_, config)
         return
     if type_ is Enum:
         yield enum_validator

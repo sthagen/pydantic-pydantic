@@ -42,6 +42,10 @@ from pydantic.types import (
     NoneBytes,
     NoneStr,
     NoneStrBytes,
+    NonNegativeFloat,
+    NonNegativeInt,
+    NonPositiveFloat,
+    NonPositiveInt,
     PositiveFloat,
     PositiveInt,
     PyObject,
@@ -80,11 +84,9 @@ def test_key():
         'title': 'ApplePie',
         'description': 'This is a test.',
     }
-    assert True not in ApplePie.__schema_cache__
-    assert False not in ApplePie.__schema_cache__
+    assert ApplePie.__schema_cache__.keys() == set()
     assert ApplePie.schema() == s
-    assert True in ApplePie.__schema_cache__
-    assert False not in ApplePie.__schema_cache__
+    assert ApplePie.__schema_cache__.keys() == {(True, '#/definitions/{model}')}
     assert ApplePie.schema() == s
 
 
@@ -108,6 +110,35 @@ def test_by_alias():
     }
     assert list(ApplePie.schema(by_alias=True)['properties'].keys()) == ['Snap', 'Crackle']
     assert list(ApplePie.schema(by_alias=False)['properties'].keys()) == ['a', 'b']
+
+
+def test_ref_template():
+    class KeyLimePie(BaseModel):
+        x: str = None
+
+    class ApplePie(BaseModel):
+        a: float = None
+        key_lime: KeyLimePie = None
+
+        class Config:
+            title = 'Apple Pie'
+
+    assert ApplePie.schema(ref_template='foobar/{model}.json') == {
+        'title': 'Apple Pie',
+        'type': 'object',
+        'properties': {'a': {'title': 'A', 'type': 'number'}, 'key_lime': {'$ref': 'foobar/KeyLimePie.json'}},
+        'definitions': {
+            'KeyLimePie': {
+                'title': 'KeyLimePie',
+                'type': 'object',
+                'properties': {'x': {'title': 'X', 'type': 'string'}},
+            },
+        },
+    }
+    assert ApplePie.schema()['properties']['key_lime'] == {'$ref': '#/definitions/KeyLimePie'}
+    json_schema = ApplePie.schema_json(ref_template='foobar/{model}.json')
+    assert 'foobar/KeyLimePie.json' in json_schema
+    assert '#/definitions/KeyLimePie' not in json_schema
 
 
 def test_by_alias_generator():
@@ -343,6 +374,33 @@ def test_enum_and_model_have_same_behaviour():
         },
         'required': ['enum', 'titled_enum', 'model', 'titled_model'],
         'title': 'Foo',
+        'type': 'object',
+    }
+
+
+def test_list_enum_schema_extras():
+    class FoodChoice(str, Enum):
+        spam = 'spam'
+        egg = 'egg'
+        chips = 'chips'
+
+    class Model(BaseModel):
+        foods: List[FoodChoice] = Field(examples=[['spam', 'egg']])
+
+    assert Model.schema() == {
+        'definitions': {
+            'FoodChoice': {
+                'description': 'An enumeration.',
+                'enum': ['spam', 'egg', 'chips'],
+                'title': 'FoodChoice',
+                'type': 'string',
+            }
+        },
+        'properties': {
+            'foods': {'type': 'array', 'items': {'$ref': '#/definitions/FoodChoice'}, 'examples': [['spam', 'egg']]},
+        },
+        'required': ['foods'],
+        'title': 'Model',
         'type': 'object',
     }
 
@@ -727,6 +785,8 @@ def test_secret_types(field_type, inner_type):
         (conint(multiple_of=5), {'multipleOf': 5}),
         (PositiveInt, {'exclusiveMinimum': 0}),
         (NegativeInt, {'exclusiveMaximum': 0}),
+        (NonNegativeInt, {'minimum': 0}),
+        (NonPositiveInt, {'maximum': 0}),
     ],
 )
 def test_special_int_types(field_type, expected_schema):
@@ -753,6 +813,8 @@ def test_special_int_types(field_type, expected_schema):
         (confloat(multiple_of=5), {'multipleOf': 5}),
         (PositiveFloat, {'exclusiveMinimum': 0}),
         (NegativeFloat, {'exclusiveMaximum': 0}),
+        (NonNegativeFloat, {'minimum': 0}),
+        (NonPositiveFloat, {'maximum': 0}),
         (ConstrainedDecimal, {}),
         (condecimal(gt=5, lt=10), {'exclusiveMinimum': 5, 'exclusiveMaximum': 10}),
         (condecimal(ge=5, le=10), {'minimum': 5, 'maximum': 10}),
@@ -1184,7 +1246,17 @@ def test_schema_from_models():
     }
 
 
-def test_schema_with_ref_prefix():
+@pytest.mark.parametrize(
+    'ref_prefix,ref_template',
+    [
+        # OpenAPI style
+        ('#/components/schemas/', None),
+        (None, '#/components/schemas/{model}'),
+        # ref_prefix takes priority
+        ('#/components/schemas/', '#/{model}/schemas/'),
+    ],
+)
+def test_schema_with_refs(ref_prefix, ref_template):
     class Foo(BaseModel):
         a: str
 
@@ -1194,7 +1266,7 @@ def test_schema_with_ref_prefix():
     class Baz(BaseModel):
         c: Bar
 
-    model_schema = schema([Bar, Baz], ref_prefix='#/components/schemas/')  # OpenAPI style
+    model_schema = schema([Bar, Baz], ref_prefix=ref_prefix, ref_template=ref_template)
     assert model_schema == {
         'definitions': {
             'Baz': {
@@ -1217,6 +1289,55 @@ def test_schema_with_ref_prefix():
             },
         }
     }
+
+
+def test_schema_with_custom_ref_template():
+    class Foo(BaseModel):
+        a: str
+
+    class Bar(BaseModel):
+        b: Foo
+
+    class Baz(BaseModel):
+        c: Bar
+
+    model_schema = schema([Bar, Baz], ref_template='/schemas/{model}.json#/')
+    assert model_schema == {
+        'definitions': {
+            'Baz': {
+                'title': 'Baz',
+                'type': 'object',
+                'properties': {'c': {'$ref': '/schemas/Bar.json#/'}},
+                'required': ['c'],
+            },
+            'Bar': {
+                'title': 'Bar',
+                'type': 'object',
+                'properties': {'b': {'$ref': '/schemas/Foo.json#/'}},
+                'required': ['b'],
+            },
+            'Foo': {
+                'title': 'Foo',
+                'type': 'object',
+                'properties': {'a': {'title': 'A', 'type': 'string'}},
+                'required': ['a'],
+            },
+        }
+    }
+
+
+def test_schema_ref_template_key_error():
+    class Foo(BaseModel):
+        a: str
+
+    class Bar(BaseModel):
+        b: Foo
+
+    class Baz(BaseModel):
+        c: Bar
+
+    with pytest.raises(KeyError):
+        schema([Bar, Baz], ref_template='/schemas/{bad_name}.json#/')
 
 
 def test_schema_no_definitions():
@@ -1900,7 +2021,6 @@ def test_model_process_schema_enum():
         bar = 'b'
 
     model_schema, _, _ = model_process_schema(SpamEnum, model_name_map={})
-    print(model_schema)
     assert model_schema == {'title': 'SpamEnum', 'description': 'An enumeration.', 'type': 'string', 'enum': ['f', 'b']}
 
 

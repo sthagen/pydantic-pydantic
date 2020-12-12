@@ -5,7 +5,7 @@ from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, Ty
 import pytest
 
 from pydantic import BaseModel, Field, ValidationError, root_validator, validator
-from pydantic.generics import GenericModel, _generic_types_cache, get_caller_module_name
+from pydantic.generics import GenericModel, _generic_types_cache
 
 skip_36 = pytest.mark.skipif(sys.version_info < (3, 7), reason='generics only supported for python 3.7 and above')
 
@@ -601,6 +601,28 @@ def test_multiple_specification():
 
 
 @skip_36
+def test_generic_subclass_of_concrete_generic():
+    T = TypeVar('T')
+    U = TypeVar('U')
+
+    class GenericBaseModel(GenericModel, Generic[T]):
+        data: T
+
+    class GenericSub(GenericBaseModel[int], Generic[U]):
+        extra: U
+
+    ConcreteSub = GenericSub[int]
+
+    with pytest.raises(ValidationError):
+        ConcreteSub(data=2, extra='wrong')
+
+    with pytest.raises(ValidationError):
+        ConcreteSub(data='wrong', extra=2)
+
+    ConcreteSub(data=2, extra=3)
+
+
+@skip_36
 def test_generic_model_pickle(create_module):
     # Using create_module because pickle doesn't support
     # objects with <locals> in their __qualname__  (e. g. defined in function)
@@ -664,8 +686,7 @@ def test_generic_model_redefined_without_cache_fail(create_module):
     def module():
         from typing import Generic, TypeVar
 
-        import pytest
-
+        from pydantic import BaseModel
         from pydantic.generics import GenericModel, _generic_types_cache
 
         t = TypeVar('t')
@@ -673,93 +694,65 @@ def test_generic_model_redefined_without_cache_fail(create_module):
         class MyGeneric(GenericModel, Generic[t]):
             value: t
 
-        concrete = MyGeneric[t]
+        class Model(BaseModel):
+            ...
+
+        concrete = MyGeneric[Model]
         _generic_types_cache.clear()
-        with pytest.raises(
-            TypeError, match=r"'MyGeneric\[t\]' already defined above, please consider reusing it"
-        ) as exc_info:
-            MyGeneric[t]
+        second_concrete = MyGeneric[Model]
 
-        cause = exc_info.value.__cause__
-        assert isinstance(cause, NameError), cause
-        expected_message = f"Name conflict: 'MyGeneric[t]' in {__name__!r} is already used by {concrete!r}"
-        assert cause.args[0] == expected_message, f'{cause.args[0]} != {expected_message}'
+        class Model(BaseModel):  # same name, but type different, so it's not in cache
+            ...
 
-
-def test_get_caller_module_name_from_function():
-    def get_current_module_name():
-        return get_caller_module_name()
-
-    assert get_current_module_name() == __name__
+        third_concrete = MyGeneric[Model]
+        assert concrete is not second_concrete
+        assert concrete is not third_concrete
+        assert second_concrete is not third_concrete
+        assert globals()['MyGeneric[Model]'] is concrete
+        assert globals()['MyGeneric[Model]_'] is second_concrete
+        assert globals()['MyGeneric[Model]__'] is third_concrete
 
 
-def test_get_caller_module_name_from_module(create_module):
+def test_get_caller_frame_info(create_module):
     @create_module
     def module():
-        from pydantic.generics import get_caller_module_name
-
-        def get_current_module_name():
-            return get_caller_module_name()
-
-        module_name = get_current_module_name()
-        assert module_name == __name__, f'{module_name} != {__name__}'
-
-        def get_current_module_name():
-            return get_caller_module_name()
-
-        assert get_current_module_name() == __name__
-
-
-def test_get_caller_module_name_not_found(mocker):
-    mocker.patch('inspect.getmodule', return_value=None)
-    assert get_caller_module_name() is None
-
-
-def test_is_call_from_module(create_module):
-    @create_module
-    def module():
-        from pydantic.generics import is_call_from_module
+        from pydantic.generics import get_caller_frame_info
 
         def function():
-            assert is_call_from_module()
+            assert get_caller_frame_info() == (__name__, True)
 
             another_function()
 
         def another_function():
-            assert not is_call_from_module()
+            assert get_caller_frame_info() == (__name__, False)
             third_function()
 
         def third_function():
-            assert not is_call_from_module()
+            assert get_caller_frame_info() == (__name__, False)
 
         function()
 
 
-def test_is_call_from_module_called_in_module(run_as_module):
-    @run_as_module
+def test_get_caller_frame_info_called_from_module(create_module):
+    @create_module
     def module():
+        from unittest.mock import patch
+
         import pytest
 
-        from pydantic.generics import is_call_from_module
+        from pydantic.generics import get_caller_frame_info
 
-        with pytest.raises(RuntimeError, match='This function must be used inside another function') as exc_info:
-            is_call_from_module()
-
-        e = exc_info.value
-        assert isinstance(e.__cause__, IndexError), e.__cause__
-        assert isinstance(e.__context__, IndexError), e.__context__
+        with pytest.raises(RuntimeError, match='This function must be used inside another function'):
+            with patch('sys._getframe', side_effect=ValueError('getframe_exc')):
+                get_caller_frame_info()
 
 
-def test_get_caller_module_called_from_module(run_as_module):
-    @run_as_module
-    def module():
-        import pytest
+def test_get_caller_frame_info_when_sys_getframe_undefined():
+    from pydantic.generics import get_caller_frame_info
 
-        from pydantic.generics import get_caller_module_name
-
-        with pytest.raises(RuntimeError, match='This function must be used inside another function') as exc_info:
-            get_caller_module_name()
-
-        e = exc_info.value
-        assert isinstance(e.__cause__, IndexError), e.__cause__
-        assert isinstance(e.__context__, IndexError), e.__context__
+    getframe = sys._getframe
+    del sys._getframe
+    try:
+        assert get_caller_frame_info() == (None, False)
+    finally:  # just to make sure we always setting original attribute back
+        sys._getframe = getframe
