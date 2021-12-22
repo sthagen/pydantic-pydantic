@@ -1,6 +1,8 @@
 from configparser import ConfigParser
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type as TypingType, Union
 
+from pydantic.utils import is_valid_field
+
 try:
     import toml
 except ImportError:  # pragma: no cover
@@ -12,6 +14,14 @@ except ImportError:  # pragma: no cover
 
         warnings.warn('No TOML parser installed, cannot read configuration from `pyproject.toml`.')
         toml = None  # type: ignore
+
+try:
+    from mypy.types import TypeVarDef
+except ImportError:  # pragma: no cover
+    # Backward-compatible with TypeVarDef from Mypy 0.910.
+    from mypy.types import TypeVarType as TypeVarDef  # type: ignore[misc]
+
+
 from mypy.errorcodes import ErrorCode
 from mypy.nodes import (
     ARG_NAMED,
@@ -57,7 +67,6 @@ from mypy.types import (
     Type,
     TypeOfAny,
     TypeType,
-    TypeVarDef,
     TypeVarType,
     UnionType,
     get_proper_type,
@@ -247,7 +256,7 @@ class PydanticModelTransformer:
                 continue
 
             lhs = stmt.lvalues[0]
-            if not isinstance(lhs, NameExpr):
+            if not isinstance(lhs, NameExpr) or not is_valid_field(lhs.name):
                 continue
 
             if not stmt.new_syntax and self.plugin_config.warn_untyped_fields:
@@ -268,7 +277,9 @@ class PydanticModelTransformer:
                 # Basically, it is an edge case when dealing with complex import logic
                 # This is the same logic used in the dataclasses plugin
                 continue
-            if not isinstance(node, Var):
+            if not isinstance(node, Var):  # pragma: no cover
+                # Don't know if this edge case still happens with the `is_valid_field` check above
+                # but better safe than sorry
                 continue
 
             # x: ClassVar[int] is ignored by dataclasses.
@@ -355,7 +366,13 @@ class PydanticModelTransformer:
         tvd = TypeVarDef(self_tvar_name, tvar_fullname, -1, [], obj_type)
         self_tvar_expr = TypeVarExpr(self_tvar_name, tvar_fullname, [], obj_type)
         ctx.cls.info.names[self_tvar_name] = SymbolTableNode(MDEF, self_tvar_expr)
-        self_type = TypeVarType(tvd)
+
+        # Backward-compatible with TypeVarDef from Mypy 0.910.
+        if isinstance(tvd, TypeVarType):  # pragma: no cover
+            self_type = tvd
+        else:
+            self_type = TypeVarType(tvd)
+
         add_method(
             ctx,
             'construct',
