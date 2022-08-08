@@ -44,6 +44,7 @@ from .typing import (
     is_new_type,
     is_none_type,
     is_typeddict,
+    is_typeddict_special,
     is_union,
     new_type_supertype,
 )
@@ -200,7 +201,8 @@ class FieldInfo(Representation):
                 current_value = getattr(self, attr_name)
             except AttributeError:
                 # attr_name is not an attribute of FieldInfo, it should therefore be added to extra
-                self.extra[attr_name] = value
+                # (except if extra already has this value!)
+                self.extra.setdefault(attr_name, value)
             else:
                 if current_value is self.__field_constraints__.get(attr_name, None):
                     setattr(self, attr_name, value)
@@ -615,7 +617,7 @@ class ModelField(Representation):
 
         origin = get_origin(self.type_)
 
-        if origin is Annotated:
+        if origin is Annotated or is_typeddict_special(origin):
             self.type_ = get_args(self.type_)[0]
             self._type_analysis()
             return
@@ -1104,7 +1106,7 @@ class ModelField(Representation):
         except TypeError:
             try:
                 # BaseModel or dataclass
-                discriminator_value = getattr(v, self.discriminator_alias)
+                discriminator_value = getattr(v, self.discriminator_key)
             except (AttributeError, TypeError):
                 return v, ErrorWrapper(MissingDiscriminator(discriminator_key=self.discriminator_key), loc)
 

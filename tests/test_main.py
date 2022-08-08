@@ -19,6 +19,7 @@ from typing import (
 from uuid import UUID, uuid4
 
 import pytest
+from typing_extensions import Annotated
 
 from pydantic import (
     BaseConfig,
@@ -585,12 +586,14 @@ def test_const_list():
         'properties': {
             'a': {
                 'const': [SubModel(b=1), SubModel(b=2), SubModel(b=3)],
+                'default': [{'b': 1}, {'b': 2}, {'b': 3}],
                 'items': {'$ref': '#/definitions/SubModel'},
                 'title': 'A',
                 'type': 'array',
             },
             'b': {
                 'const': [{'b': 4}, {'b': 5}, {'b': 6}],
+                'default': [{'b': 4}, {'b': 5}, {'b': 6}],
                 'items': {'$ref': '#/definitions/SubModel'},
                 'title': 'B',
                 'type': 'array',
@@ -2172,6 +2175,19 @@ def test_new_union_origin():
         'properties': {'x': {'title': 'X', 'anyOf': [{'type': 'integer'}, {'type': 'string'}]}},
         'required': ['x'],
     }
+
+
+def test_annotated_class():
+    class PydanticModel(BaseModel):
+        foo: str = '123'
+
+    PydanticAlias = Annotated[PydanticModel, 'bar baz']
+
+    pa = PydanticAlias()
+    assert isinstance(pa, PydanticModel)
+    pa.__doc__ = 'qwe'
+    assert repr(pa) == "PydanticModel(foo='123')"
+    assert pa.__doc__ == 'qwe'
 
 
 @pytest.mark.parametrize(

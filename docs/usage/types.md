@@ -254,7 +254,7 @@ chose to match against the `int` type and disregarded the other types.
     when combined with matching based on the `Union` type order inside other type definitions, such as `List` and `Dict`
     types (because Python treats these definitions as singletons).
     For example, `Dict[str, Union[int, float]] == Dict[str, Union[float, int]]` with the order based on the first time it was defined.
-    Please note that this can also be [affected by third party libraries](https://github.com/samuelcolvin/pydantic/issues/2835)
+    Please note that this can also be [affected by third party libraries](https://github.com/pydantic/pydantic/issues/2835)
     and their internal type definitions and the import orders.
 
 As such, it is recommended that, when defining `Union` annotations, the most specific type is included first and
@@ -543,6 +543,9 @@ _(This script is complete, it should run "as is")_
 `PostgresDsn`
 : a postgres DSN style URL; see [URLs](#urls)
 
+`CockroachDsn`
+: a cockroachdb DSN style URL; see [URLs](#urls)
+
 `RabbitMqDsn`
 : an `AMQP` DSN style URL as used by RabbitMQ, StormMQ, ActiveMQ etc.; see [URLs](#urls)
 
@@ -651,6 +654,9 @@ For URI/URL validation the following types are available:
   - `postgresql+psycopg2cffi`
   - `postgresql+py-postgresql`
   - `postgresql+pygresql`
+- `CockroachDsn`: scheme `cockroachdb`, user info required, TLD not required, host required. Also, its supported DBAPI dialects:
+  - `cockroachdb+asyncpg`
+  - `cockroachdb+psycopg2`
 - `AmqpDsn`: schema `amqp` or `amqps`, user info not required, TLD not required, host not required
 - `RedisDsn`: scheme `redis` or `rediss`, user info not required, tld not required, host not required (CHANGED: user info
 - `MongoDsn` : scheme `mongodb`, user info not required, database name not required, port
@@ -904,6 +910,7 @@ The following arguments are available when using the `condecimal` type function
 The following arguments are available when using the `constr` type function
 
 - `strip_whitespace: bool = False`: removes leading and trailing whitespace
+- `to_upper: bool = False`: turns all characters to uppercase
 - `to_lower: bool = False`: turns all characters to lowercase
 - `strict: bool = False`: controls type coercion
 - `min_length: int = None`: minimum length of the string
@@ -915,6 +922,7 @@ The following arguments are available when using the `constr` type function
 The following arguments are available when using the `conbytes` type function
 
 - `strip_whitespace: bool = False`: removes leading and trailing whitespace
+- `to_upper: bool = False`: turns all characters to uppercase
 - `to_lower: bool = False`: turns all characters to lowercase
 - `min_length: int = None`: minimum length of the byte string
 - `max_length: int = None`: maximum length of the byte string

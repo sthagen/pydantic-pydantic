@@ -1,3 +1,4 @@
+import keyword
 import warnings
 import weakref
 from collections import OrderedDict, defaultdict, deque
@@ -59,6 +60,7 @@ __all__ = (
     'lenient_isinstance',
     'lenient_issubclass',
     'in_ipython',
+    'is_valid_identifier',
     'deep_update',
     'update_not_none',
     'almost_equal_floats',
@@ -76,6 +78,7 @@ __all__ = (
     'ROOT_KEY',
     'get_unique_discriminator_alias',
     'get_discriminator_alias_and_values',
+    'DUNDER_ATTRIBUTES',
     'LimitedDict',
 )
 
@@ -196,6 +199,15 @@ def in_ipython() -> bool:
         return True
 
 
+def is_valid_identifier(identifier: str) -> bool:
+    """
+    Checks that a string is a valid identifier and not a Python keyword.
+    :param identifier: The identifier to test.
+    :return: True if the identifier is valid.
+    """
+    return identifier.isidentifier() and not keyword.iskeyword(identifier)
+
+
 KeyType = TypeVar('KeyType')
 
 
@@ -248,8 +260,8 @@ def generate_model_signature(
             param_name = field.alias
             if field_name in merged_params or param_name in merged_params:
                 continue
-            elif not param_name.isidentifier():
-                if allow_names and field_name.isidentifier():
+            elif not is_valid_identifier(param_name):
+                if allow_names and is_valid_identifier(field_name):
                     param_name = field_name
                 else:
                     use_var_kw = True
@@ -680,15 +692,19 @@ def is_valid_field(name: str) -> bool:
     return ROOT_KEY == name
 
 
+DUNDER_ATTRIBUTES = {
+    '__annotations__',
+    '__classcell__',
+    '__doc__',
+    '__module__',
+    '__orig_bases__',
+    '__orig_class__',
+    '__qualname__',
+}
+
+
 def is_valid_private_name(name: str) -> bool:
-    return not is_valid_field(name) and name not in {
-        '__annotations__',
-        '__classcell__',
-        '__doc__',
-        '__module__',
-        '__orig_bases__',
-        '__qualname__',
-    }
+    return not is_valid_field(name) and name not in DUNDER_ATTRIBUTES
 
 
 _EMPTY = object()

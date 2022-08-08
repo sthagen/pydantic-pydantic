@@ -77,7 +77,7 @@ from .typing import (
     is_none_type,
     is_union,
 )
-from .utils import ROOT_KEY, get_model, lenient_issubclass, sequence_like
+from .utils import ROOT_KEY, get_model, lenient_issubclass
 
 if TYPE_CHECKING:
     from .dataclasses import Dataclass
@@ -210,12 +210,7 @@ def get_field_info_schema(field: ModelField, schema_overrides: bool = False) -> 
         schema_['description'] = field.field_info.description
         schema_overrides = True
 
-    if (
-        not field.required
-        and not field.field_info.const
-        and field.default is not None
-        and not is_callable_type(field.outer_type_)
-    ):
+    if not field.required and field.default is not None and not is_callable_type(field.outer_type_):
         schema_['default'] = encode_default(field.default)
         schema_overrides = True
 
@@ -754,7 +749,7 @@ def field_singleton_sub_fields_schema(
             if schema_overrides and 'allOf' in sub_schema:
                 # if the sub_field is a referenced schema we only need the referenced
                 # object. Otherwise we will end up with several allOf inside anyOf.
-                # See https://github.com/samuelcolvin/pydantic/issues/1209
+                # See https://github.com/pydantic/pydantic/issues/1209
                 sub_schema = sub_schema['allOf'][0]
 
             if sub_schema.keys() == {'discriminator', 'anyOf'}:
@@ -975,7 +970,7 @@ def encode_default(dft: Any) -> Any:
         return dft.value
     elif isinstance(dft, (int, float, str)):
         return dft
-    elif sequence_like(dft):
+    elif isinstance(dft, (list, tuple)):
         t = dft.__class__
         seq_args = (encode_default(v) for v in dft)
         return t(*seq_args) if is_namedtuple(t) else t(seq_args)

@@ -25,6 +25,9 @@ _(This script is complete, it should run "as is")_
 **`anystr_strip_whitespace`**
 : whether to strip leading and trailing whitespace for str & byte types (default: `False`)
 
+**`anystr_upper`**
+: whether to make all characters uppercase for str & byte types (default: `False`)
+
 **`anystr_lower`**
 : whether to make all characters lowercase for str & byte types (default: `False`)
 
@@ -60,7 +63,12 @@ _(This script is complete, it should run "as is")_
 
 **`fields`**
 : a `dict` containing schema information for each field; this is equivalent to
-  using [the `Field` class](schema.md) (default: `None`)
+  using [the `Field` class](schema.md), except when a field is already
+  defined trough annotation or the Field class, in which case only
+  `alias`, `include`, `exclude`, `min_length`, `max_length`, `regex`, `gt`, `lt`, `gt`, `le`,
+  `multiple_of`, `max_digits`, `decimal_places`, `min_items`, `max_items`, `unique_items`
+  and allow_mutation can be set (for example you cannot set default of default_factory)
+   (default: `None`)
 
 **`validate_assignment`**
 : whether to perform validation on *assignment* to attributes (default: `False`)
@@ -150,7 +158,7 @@ instead use the `to_lower_camel` function.
 !!! warning
     Alias priority logic changed in **v1.4** to resolve buggy and unexpected behaviour in previous versions.
     In some circumstances this may represent a **breaking change**,
-    see [#1178](https://github.com/samuelcolvin/pydantic/issues/1178) and the precedence order below for details.
+    see [#1178](https://github.com/pydantic/pydantic/issues/1178) and the precedence order below for details.
 
 In the case where a field's alias may be defined in multiple places,
 the selected value is determined as follows (in descending order of priority):
