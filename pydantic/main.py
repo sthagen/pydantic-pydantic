@@ -4,7 +4,7 @@ from copy import deepcopy
 from enum import Enum
 from functools import partial
 from pathlib import Path
-from types import FunctionType
+from types import FunctionType, prepare_class, resolve_bases
 from typing import (
     TYPE_CHECKING,
     AbstractSet,
@@ -427,7 +427,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
-        encode_as_json: bool = False,
     ) -> 'DictStrAny':
         """
         Generate a dictionary representation of the model, optionally specifying which fields to include or exclude.
@@ -449,7 +448,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
                 exclude_unset=exclude_unset,
                 exclude_defaults=exclude_defaults,
                 exclude_none=exclude_none,
-                encode_as_json=encode_as_json,
             )
         )
 
@@ -465,7 +463,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         exclude_none: bool = False,
         encoder: Optional[Callable[[Any], Any]] = None,
         models_as_dict: bool = True,
-        use_nested_encoders: bool = False,
         **dumps_kwargs: Any,
     ) -> str:
         """
@@ -493,7 +490,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
                 exclude_unset=exclude_unset,
                 exclude_defaults=exclude_defaults,
                 exclude_none=exclude_none,
-                encode_as_json=use_nested_encoders,
             )
         )
         if self.__custom_root_type__:
@@ -588,7 +584,9 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         m = cls.__new__(cls)
         fields_values: Dict[str, Any] = {}
         for name, field in cls.__fields__.items():
-            if name in values:
+            if field.alt_alias and field.alias in values:
+                fields_values[name] = values[field.alias]
+            elif name in values:
                 fields_values[name] = values[name]
             elif not field.required:
                 fields_values[name] = field.get_default()
@@ -676,10 +674,28 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
     @classmethod
     def validate(cls: Type['Model'], value: Any) -> 'Model':
         if isinstance(value, cls):
-            if cls.__config__.copy_on_model_validation:
-                return value._copy_and_set_values(value.__dict__, value.__fields_set__, deep=True)
-            else:
+            copy_on_model_validation = cls.__config__.copy_on_model_validation
+            # whether to deep or shallow copy the model on validation, None means do not copy
+            deep_copy: Optional[bool] = None
+            if copy_on_model_validation not in {'deep', 'shallow', 'none'}:
+                # Warn about deprecated behavior
+                warnings.warn(
+                    "`copy_on_model_validation` should be a string: 'deep', 'shallow' or 'none'", DeprecationWarning
+                )
+                if copy_on_model_validation:
+                    deep_copy = False
+
+            if copy_on_model_validation == 'shallow':
+                # shallow copy
+                deep_copy = False
+            elif copy_on_model_validation == 'deep':
+                # deep copy
+                deep_copy = True
+
+            if deep_copy is None:
                 return value
+            else:
+                return value._copy_and_set_values(value.__dict__, value.__fields_set__, deep=deep_copy)
 
         value = cls._enforce_dict_if_root(value)
 
@@ -712,7 +728,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         exclude_unset: bool,
         exclude_defaults: bool,
         exclude_none: bool,
-        encode_as_json: bool = False,
     ) -> Any:
 
         if isinstance(v, BaseModel):
@@ -724,7 +739,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
                     include=include,
                     exclude=exclude,
                     exclude_none=exclude_none,
-                    encode_as_json=encode_as_json,
                 )
                 if ROOT_KEY in v_dict:
                     return v_dict[ROOT_KEY]
@@ -774,9 +788,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         elif isinstance(v, Enum) and getattr(cls.Config, 'use_enum_values', False):
             return v.value
 
-        elif encode_as_json:
-            return cls.__json_encoder__(v)
-
         else:
             return v
 
@@ -810,7 +821,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
-        encode_as_json: bool = False,
     ) -> 'TupleGenerator':
 
         # Merge field set excludes with explicit exclude parameter with explicit overriding field set options.
@@ -856,7 +866,6 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
                     exclude_unset=exclude_unset,
                     exclude_defaults=exclude_defaults,
                     exclude_none=exclude_none,
-                    encode_as_json=encode_as_json,
                 )
             yield dict_key, v
 
@@ -996,8 +1005,12 @@ def create_model(
     namespace.update(fields)
     if __config__:
         namespace['Config'] = inherit_config(__config__, BaseConfig)
-
-    return type(__model_name, __base__, namespace, **__cls_kwargs__)
+    resolved_bases = resolve_bases(__base__)
+    meta, ns, kwds = prepare_class(__model_name, resolved_bases, kwds=__cls_kwargs__)
+    if resolved_bases is not __base__:
+        ns['__orig_bases__'] = __base__
+    namespace.update(ns)
+    return meta(__model_name, resolved_bases, namespace, **kwds)
 
 
 _missing = object()

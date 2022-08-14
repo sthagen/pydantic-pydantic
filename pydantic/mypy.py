@@ -76,7 +76,13 @@ BASEMODEL_FULLNAME = 'pydantic.main.BaseModel'
 BASESETTINGS_FULLNAME = 'pydantic.env_settings.BaseSettings'
 FIELD_FULLNAME = 'pydantic.fields.Field'
 DATACLASS_FULLNAME = 'pydantic.dataclasses.dataclass'
-BUILTINS_NAME = 'builtins' if float(mypy_version) >= 0.930 else '__builtins__'
+
+
+def parse_mypy_version(version: str) -> Tuple[int, ...]:
+    return tuple(int(part) for part in version.split('+', 1)[0].split('.'))
+
+
+BUILTINS_NAME = 'builtins' if parse_mypy_version(mypy_version) >= (0, 930) else '__builtins__'
 
 
 def plugin(version: str) -> 'TypingType[Plugin]':
@@ -411,7 +417,9 @@ class PydanticModelTransformer:
         if not self.should_init_forbid_extra(fields, config):
             var = Var('kwargs')
             init_arguments.append(Argument(var, AnyType(TypeOfAny.explicit), None, ARG_STAR2))
-        add_method(ctx, '__init__', init_arguments, NoneType())
+
+        if '__init__' not in ctx.cls.info.names:
+            add_method(ctx, '__init__', init_arguments, NoneType())
 
     def add_construct_method(self, fields: List['PydanticModelField']) -> None:
         """
@@ -727,7 +735,7 @@ def add_method(
     if name in info.names:
         sym = info.names[name]
         if sym.plugin_generated and isinstance(sym.node, FuncDef):
-            ctx.cls.defs.body.remove(sym.node)
+            ctx.cls.defs.body.remove(sym.node)  # pragma: no cover
 
     self_type = self_type or fill_typevars(info)
     if is_classmethod or is_new:

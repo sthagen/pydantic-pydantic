@@ -600,6 +600,17 @@ def test_initvars_post_init_post_parse():
     assert PathDataPostInitPostParse('world', base_path='/hello').path == Path('/hello/world')
 
 
+def test_post_init_post_parse_without_initvars():
+    @pydantic.dataclasses.dataclass
+    class Foo:
+        a: int
+
+        def __post_init_post_parse__(self):
+            ...
+
+    Foo(a=1)
+
+
 def test_classvar():
     @pydantic.dataclasses.dataclass
     class TestClassVar:
@@ -1190,7 +1201,7 @@ def test_issue_3162():
     }
 
 
-def test_discrimated_union_basemodel_instance_value():
+def test_discriminated_union_basemodel_instance_value():
     @pydantic.dataclasses.dataclass
     class A:
         l: Literal['a']
@@ -1212,7 +1223,7 @@ def test_discrimated_union_basemodel_instance_value():
             'sub': {
                 'title': 'Sub',
                 'discriminator': {'propertyName': 'l', 'mapping': {'a': '#/definitions/A', 'b': '#/definitions/B'}},
-                'anyOf': [{'$ref': '#/definitions/A'}, {'$ref': '#/definitions/B'}],
+                'oneOf': [{'$ref': '#/definitions/A'}, {'$ref': '#/definitions/B'}],
             }
         },
         'required': ['sub'],
@@ -1360,3 +1371,27 @@ def test_kw_only():
         A(1, '')
 
     assert A(b='hi').b == 'hi'
+
+
+def test_extra_forbid_list_no_error():
+    @pydantic.dataclasses.dataclass(config=dict(extra=Extra.forbid))
+    class Bar:
+        ...
+
+    @pydantic.dataclasses.dataclass
+    class Foo:
+        a: List[Bar]
+
+    assert isinstance(Foo(a=[Bar()]).a[0], Bar)
+
+
+def test_extra_forbid_list_error():
+    @pydantic.dataclasses.dataclass(config=dict(extra=Extra.forbid))
+    class Bar:
+        ...
+
+    with pytest.raises(TypeError, match=re.escape("__init__() got an unexpected keyword argument 'a'")):
+
+        @pydantic.dataclasses.dataclass
+        class Foo:
+            a: List[Bar(a=1)]

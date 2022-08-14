@@ -11,6 +11,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    ForwardRef,
     FrozenSet,
     Generic,
     Iterable,
@@ -66,7 +67,6 @@ from .types import (
     constr,
 )
 from .typing import (
-    ForwardRef,
     all_literal_values,
     get_args,
     get_origin,
@@ -383,6 +383,7 @@ def get_flat_models_from_field(field: ModelField, known_models: TypeModelSet) ->
     field_type = field.type_
     if lenient_issubclass(getattr(field_type, '__pydantic_model__', None), BaseModel):
         field_type = field_type.__pydantic_model__
+
     if field.sub_fields and not lenient_issubclass(field_type, BaseModel):
         flat_models |= get_flat_models_from_fields(field.sub_fields, known_models=known_models)
     elif lenient_issubclass(field_type, BaseModel) and field_type not in known_models:
@@ -705,7 +706,8 @@ def field_singleton_sub_fields_schema(
     else:
         s: Dict[str, Any] = {}
         # https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#discriminator-object
-        if field.discriminator_key is not None:
+        field_has_discriminator: bool = field.discriminator_key is not None
+        if field_has_discriminator:
             assert field.sub_fields_mapping is not None
 
             discriminator_models_refs: Dict[str, Union[str, Dict[str, Any]]] = {}
@@ -748,16 +750,16 @@ def field_singleton_sub_fields_schema(
             definitions.update(sub_definitions)
             if schema_overrides and 'allOf' in sub_schema:
                 # if the sub_field is a referenced schema we only need the referenced
-                # object. Otherwise we will end up with several allOf inside anyOf.
+                # object. Otherwise we will end up with several allOf inside anyOf/oneOf.
                 # See https://github.com/pydantic/pydantic/issues/1209
                 sub_schema = sub_schema['allOf'][0]
 
-            if sub_schema.keys() == {'discriminator', 'anyOf'}:
-                # we don't want discriminator information inside anyOf choices, this is dealt with elsewhere
+            if sub_schema.keys() == {'discriminator', 'oneOf'}:
+                # we don't want discriminator information inside oneOf choices, this is dealt with elsewhere
                 sub_schema.pop('discriminator')
             sub_field_schemas.append(sub_schema)
             nested_models.update(sub_nested_models)
-        s['anyOf'] = sub_field_schemas
+        s['oneOf' if field_has_discriminator else 'anyOf'] = sub_field_schemas
         return s, definitions, nested_models
 
 
@@ -801,7 +803,7 @@ def add_field_type_to_schema(field_type: Any, schema_: Dict[str, Any]) -> None:
     and then modifies the given `schema` with the information from that type.
     """
     for type_, t_schema in field_class_to_schema:
-        # Fallback for `typing.Pattern` as it is not a valid class
+        # Fallback for `typing.Pattern` and `re.Pattern` as they are not a valid class
         if lenient_issubclass(field_type, type_) or field_type is type_ is Pattern:
             schema_.update(t_schema)
             break
@@ -850,7 +852,7 @@ def field_singleton_schema(  # noqa: C901 (ignore complexity)
             ref_template=ref_template,
             known_models=known_models,
         )
-    if field_type is Any or field_type is object or field_type.__class__ == TypeVar:
+    if field_type is Any or field_type is object or field_type.__class__ == TypeVar or get_origin(field_type) is type:
         return {}, definitions, nested_models  # no restrictions
     if is_none_type(field_type):
         return {'type': 'null'}, definitions, nested_models
