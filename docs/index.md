@@ -1,9 +1,9 @@
-[![CI](https://github.com/pydantic/pydantic/workflows/CI/badge.svg?event=push)](https://github.com/pydantic/pydantic/actions?query=event%3Apush+branch%3Amaster+workflow%3ACI)
-[![Coverage](https://coverage-badge.samuelcolvin.workers.dev/samuelcolvin/pydantic.svg)](https://github.com/pydantic/pydantic/actions?query=event%3Apush+branch%3Amaster+workflow%3ACI)
+[![CI](https://github.com/pydantic/pydantic/workflows/CI/badge.svg?event=push)](https://github.com/pydantic/pydantic/actions?query=event%3Apush+branch%3Amain+workflow%3ACI)
+[![Coverage](https://coverage-badge.samuelcolvin.workers.dev/samuelcolvin/pydantic.svg)](https://github.com/pydantic/pydantic/actions?query=event%3Apush+branch%3Amain+workflow%3ACI)
 [![pypi](https://img.shields.io/pypi/v/pydantic.svg)](https://pypi.python.org/pypi/pydantic)
 [![CondaForge](https://img.shields.io/conda/v/conda-forge/pydantic.svg)](https://anaconda.org/conda-forge/pydantic)
 [![downloads](https://pepy.tech/badge/pydantic/month)](https://pepy.tech/project/pydantic)
-[![license](https://img.shields.io/github/license/samuelcolvin/pydantic.svg)](https://github.com/pydantic/pydantic/blob/master/LICENSE)
+[![license](https://img.shields.io/github/license/samuelcolvin/pydantic.svg)](https://github.com/pydantic/pydantic/blob/main/LICENSE)
 
 {!.version.md!}
 
@@ -68,10 +68,7 @@ And many more who kindly sponsor Samuel Colvin on [GitHub Sponsors](https://gith
 
 ## Example
 
-```py
-{!.tmp_examples/index_main.py!}
-```
-_(This script is complete, it should run "as is")_
+{!.tmp_examples/index_main.md!}
 
 What's going on here:
 
@@ -85,13 +82,8 @@ What's going on here:
 
 If validation fails pydantic will raise an error with a breakdown of what was wrong:
 
-```py
-{!.tmp_examples/index_error.py!}
-```
-outputs:
-```json
-{!.tmp_examples/index_error.json!}
-```
+{!.tmp_examples/index_error.md!}
+
 
 ## Rationale
 

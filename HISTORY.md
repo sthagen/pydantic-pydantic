@@ -30,7 +30,7 @@ for their kind support.
 * Prevent subclasses of bytes being converted to bytes, #3706 by @samuelcolvin
 * Fixed "error checking inheritance of" when using PEP585 and PEP604 type hints, #3681 by @aleksul
 * Allow self referencing `ClassVar`s in models, #3679 by @samuelcolvin
-* Fix issue with self-referencing dataclass, #3675 by @uriyyo
+* **Breaking Change, see #4106**: Fix issue with self-referencing dataclass, #3675 by @uriyyo
 * Include non-standard port numbers in rendered URLs, #3652 by @dolfinus
 * `Config.copy_on_model_validation` does a deep copy and not a shallow one, #3641 by @PrettyWood
 * fix: clarify that discriminated unions do not support singletons, #3636 by @tommilligan
@@ -126,7 +126,7 @@ for their kind support.
 * Add episode 313 of the *Talk Python To Me* podcast, where Michael Kennedy and Samuel Colvin discuss *pydantic*, to the docs, #2712 by @RatulMaharaj
 * fix JSON schema generation when a field is of type `NamedTuple` and has a default value, #2707 by @PrettyWood
 * `Enum` fields now properly support extra kwargs in schema generation, #2697 by @sammchardy
-* Make serialization of referenced pydantic models possible, #2650 by @PrettyWood
+* **Breaking Change, see #3780**: Make serialization of referenced pydantic models possible, #2650 by @PrettyWood
 * Add `uniqueItems` option to `ConstrainedList`, #2618 by @nuno-andre
 * Try to evaluate forward refs automatically at model creation, #2588 by @uriyyo
 * Switch docs preview and coverage display to use [smokeshow](https://smokeshow.helpmanual.io/), #2580 by @samuelcolvin

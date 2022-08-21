@@ -1634,6 +1634,18 @@ def test_strict_bytes():
         Model(v=0.42)
 
 
+def test_strict_bytes_max_length():
+    class Model(BaseModel):
+        u: StrictBytes = Field(..., max_length=5)
+
+    assert Model(u=b'foo').u == b'foo'
+
+    with pytest.raises(ValidationError, match='byte type expected'):
+        Model(u=123)
+    with pytest.raises(ValidationError, match='ensure this value has at most 5 characters'):
+        Model(u=b'1234567')
+
+
 def test_strict_bytes_subclass():
     class MyStrictBytes(StrictBytes):
         pass
@@ -1676,6 +1688,19 @@ def test_strict_str_subclass():
     m = Model(v=MyStrictStr('foobar'))
     assert isinstance(m.v, MyStrictStr)
     assert m.v == 'foobar'
+
+
+def test_strict_str_max_length():
+    class Model(BaseModel):
+        u: StrictStr = Field(..., max_length=5)
+
+    assert Model(u='foo').u == 'foo'
+
+    with pytest.raises(ValidationError, match='str type expected'):
+        Model(u=123)
+
+    with pytest.raises(ValidationError, match='ensure this value has at most 5 characters'):
+        Model(u='1234567')
 
 
 def test_strict_bool():
@@ -2638,6 +2663,10 @@ def test_secretstr_idempotent():
     assert m.password.get_secret_value() == '1234'
 
 
+def test_secretstr_is_hashable():
+    assert type(hash(SecretStr('secret'))) is int
+
+
 def test_secretstr_error():
     class Foobar(BaseModel):
         password: SecretStr
@@ -2728,6 +2757,10 @@ def test_secretbytes_idempotent():
 
     # Should not raise an exception.
     _ = Foobar(password=SecretBytes(b'1234'))
+
+
+def test_secretbytes_is_hashable():
+    assert type(hash(SecretBytes(b'secret'))) is int
 
 
 def test_secretbytes_error():

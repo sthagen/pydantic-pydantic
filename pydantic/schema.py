@@ -54,9 +54,10 @@ from .types import (
     ConstrainedInt,
     ConstrainedList,
     ConstrainedSet,
-    ConstrainedStr,
     SecretBytes,
     SecretStr,
+    StrictBytes,
+    StrictStr,
     conbytes,
     condecimal,
     confloat,
@@ -1082,12 +1083,24 @@ def get_annotation_with_constraints(annotation: Any, field_info: FieldInfo) -> T
                 def constraint_func(**kw: Any) -> Type[Any]:
                     return type(type_.__name__, (type_,), kw)
 
-            elif issubclass(type_, str) and not issubclass(type_, (EmailStr, AnyUrl, ConstrainedStr)):
+            elif issubclass(type_, str) and not issubclass(type_, (EmailStr, AnyUrl)):
                 attrs = ('max_length', 'min_length', 'regex')
-                constraint_func = constr
+                if issubclass(type_, StrictStr):
+
+                    def constraint_func(**kw: Any) -> Type[Any]:
+                        return type(type_.__name__, (type_,), kw)
+
+                else:
+                    constraint_func = constr
             elif issubclass(type_, bytes):
                 attrs = ('max_length', 'min_length', 'regex')
-                constraint_func = conbytes
+                if issubclass(type_, StrictBytes):
+
+                    def constraint_func(**kw: Any) -> Type[Any]:
+                        return type(type_.__name__, (type_,), kw)
+
+                else:
+                    constraint_func = conbytes
             elif issubclass(type_, numeric_types) and not issubclass(
                 type_,
                 (
