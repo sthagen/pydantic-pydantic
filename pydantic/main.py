@@ -286,6 +286,14 @@ class ModelMetaclass(ABCMeta):
         if resolve_forward_refs:
             cls.__try_update_forward_refs__()
 
+        # preserve `__set_name__` protocol defined in https://peps.python.org/pep-0487
+        # for attributes not in `new_namespace` (e.g. private attributes)
+        for name, obj in namespace.items():
+            if name not in new_namespace:
+                set_name = getattr(obj, '__set_name__', None)
+                if callable(set_name):
+                    set_name(cls, name)
+
         return cls
 
     def __instancecheck__(self, instance: Any) -> bool:
@@ -949,6 +957,7 @@ def create_model(
     __module__: str = __name__,
     __validators__: Dict[str, 'AnyClassMethod'] = None,
     __cls_kwargs__: Dict[str, Any] = None,
+    __slots__: Optional[Tuple[str, ...]] = None,
     **field_definitions: Any,
 ) -> Type['Model']:
     """
@@ -959,6 +968,7 @@ def create_model(
     :param __module__: module of the created model
     :param __validators__: a dict of method names and @validator class methods
     :param __cls_kwargs__: a dict for class creation
+    :param __slots__: Deprecated, `__slots__` should not be passed to `create_model`
     :param field_definitions: fields of the model (or extra fields if a base is supplied)
         in the format `<name>=(<type>, <default default>)` or `<name>=<default value>, e.g.
         `foobar=(str, ...)` or `foobar=123`, or, for complex use-cases, in the format
@@ -966,6 +976,9 @@ def create_model(
         `foo=Field(datetime, default_factory=datetime.utcnow, alias='bar')` or
         `foo=(str, FieldInfo(title='Foo'))`
     """
+    if __slots__ is not None:
+        # __slots__ will be ignored from here on
+        warnings.warn('__slots__ should not be passed to create_model', RuntimeWarning)
 
     if __base__ is not None:
         if __config__ is not None:

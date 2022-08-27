@@ -112,7 +112,12 @@ not be included in the model schemas. **Note**: this means that attributes on th
 : whether to treat any underscore non-class var attrs as private, or leave them as is; see [Private model attributes](models.md#private-model-attributes)
 
 **`copy_on_model_validation`**
-: whether inherited models used as fields should be reconstructed (copied) on validation instead of being kept untouched (default: `True`)
+: string literal to control how models instances are processed during validation, 
+with the following means (see [#4093](https://github.com/pydantic/pydantic/pull/4093) for a full discussion of the changes to this field):
+
+* `'none'` - models are not copied on validation, they're simply kept "untouched"
+* `'shallow'` - models are shallow copied, this is the default
+* `'deep'` - models are deep copied 
 
 **`smart_union`**
 : whether _pydantic_ should try to check all types inside `Union` to prevent undesired coercion; see [the dedicated section](#smart-union)
@@ -120,6 +125,11 @@ not be included in the model schemas. **Note**: this means that attributes on th
 **`post_init_call`**
 : whether stdlib dataclasses `__post_init__` should be run before (default behaviour with value `'before_validation'`)
   or after (value `'after_validation'`) parsing and validation when they are [converted](dataclasses.md#stdlib-dataclasses-and-_pydantic_-dataclasses).
+
+**`allow_inf_nan`**
+: whether to allows infinity (`+inf` an `-inf`) and NaN values to float fields, defaults to `True`,
+  set to `False` for compatibility with `JSON`,
+  see [#3994](https://github.com/pydantic/pydantic/pull/3994) for more details, added in **V1.10**
 
 ## Change behaviour globally
 

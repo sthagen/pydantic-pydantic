@@ -1,8 +1,9 @@
-from typing import Generic, TypeVar
+from typing import Generic, Optional, Tuple, TypeVar
 
 import pytest
 
 from pydantic import BaseModel, Extra, Field, ValidationError, create_model, errors, validator
+from pydantic.fields import ModelPrivateAttr
 from pydantic.generics import GenericModel
 
 
@@ -222,3 +223,44 @@ def test_generics_model():
     result = AAModel[int](aa=1)
     assert result.aa == 1
     assert result.__config__.orm_mode is True
+
+
+@pytest.mark.parametrize('base', [ModelPrivateAttr, object])
+def test_set_name(base):
+    calls = []
+
+    class class_deco(base):
+        def __init__(self, fn):
+            super().__init__()
+            self.fn = fn
+
+        def __set_name__(self, owner, name):
+            calls.append((owner, name))
+
+        def __get__(self, obj, type=None):
+            return self.fn(obj) if obj else self
+
+    class A(BaseModel):
+        x: int
+
+        @class_deco
+        def _some_func(self):
+            return self.x
+
+    assert calls == [(A, '_some_func')]
+    a = A(x=2)
+
+    # we don't test whether calling the method on a PrivateAttr works:
+    # attribute access on privateAttributes is more complicated, it doesn't
+    # get added to the class namespace (and will also get set on the instance
+    # with _init_private_attributes), so the descriptor protocol won't work.
+    if base is object:
+        assert a._some_func == 2
+
+
+def test_create_model_with_slots():
+    field_definitions = {'__slots__': (Optional[Tuple[str, ...]], None), 'foobar': (Optional[int], None)}
+    with pytest.warns(RuntimeWarning, match='__slots__ should not be passed to create_model'):
+        model = create_model('PartialPet', **field_definitions)
+
+    assert model.__fields__.keys() == {'foobar'}
