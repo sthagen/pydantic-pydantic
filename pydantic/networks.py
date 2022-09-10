@@ -26,7 +26,6 @@ from typing import (
     cast,
     no_type_check,
 )
-from urllib.parse import quote, quote_plus
 
 from . import errors
 from .utils import Representation, update_not_none
@@ -178,7 +177,6 @@ class AnyUrl(str):
     user_required: bool = False
     host_required: bool = True
     hidden_parts: Set[str] = set()
-    quote_plus: bool = False
 
     __slots__ = ('scheme', 'user', 'password', 'host', 'tld', 'host_type', 'port', 'path', 'query', 'fragment')
 
@@ -241,19 +239,18 @@ class AnyUrl(str):
 
         url = scheme + '://'
         if user:
-            url += cls.quote(user)
+            url += user
         if password:
-            url += ':' + cls.quote(password)
+            url += ':' + password
         if user or password:
             url += '@'
         url += host
         if port and ('port' not in cls.hidden_parts or cls.get_default_parts(parts).get('port') != port):
             url += ':' + port
         if path:
-            url += '/'.join(map(cls.quote, path.split('/')))
+            url += path
         if query:
-            queries = query.split('&')
-            url += '?' + '&'.join(map(lambda s: '='.join(map(cls.quote, s.split('='))), queries))
+            url += '?' + query
         if fragment:
             url += '#' + fragment
         return url
@@ -393,10 +390,6 @@ class AnyUrl(str):
             if not parts[key]:  # type: ignore[literal-required]
                 parts[key] = value  # type: ignore[literal-required]
         return parts
-
-    @classmethod
-    def quote(cls, string: str, safe: str = '') -> str:
-        return quote_plus(string, safe) if cls.quote_plus else quote(string, safe)
 
     def __repr__(self) -> str:
         extra = ', '.join(f'{n}={getattr(self, n)!r}' for n in self.__slots__ if getattr(self, n) is not None)
@@ -565,7 +558,6 @@ def stricturl(
     tld_required: bool = True,
     host_required: bool = True,
     allowed_schemes: Optional[Collection[str]] = None,
-    quote_plus: bool = False,
 ) -> Type[AnyUrl]:
     # use kwargs then define conf in a dict to aid with IDE type hinting
     namespace = dict(
@@ -575,7 +567,6 @@ def stricturl(
         tld_required=tld_required,
         host_required=host_required,
         allowed_schemes=allowed_schemes,
-        quote_plus=quote_plus,
     )
     return type('UrlValue', (AnyUrl,), namespace)
 
@@ -709,19 +700,17 @@ class IPvAnyNetwork(_BaseNetwork):  # type: ignore
             raise errors.IPvAnyNetworkError()
 
 
-pretty_email_regex = re.compile(r'([\w ]*?) *<(.*)> *')
+pretty_email_regex = re.compile(r' *([\w ]*?) *<(.+?)> *')
 
 
 def validate_email(value: Union[str]) -> Tuple[str, str]:
     """
-    Brutally simple email address validation. Note unlike most email address validation
+    Email address validation using https://pypi.org/project/email-validator/
+
+    Notes:
     * raw ip address (literal) domain parts are not allowed.
     * "John Doe <local_part@domain.com>" style "pretty" email addresses are processed
-    * the local part check is extremely basic. This raises the possibility of unicode spoofing, but no better
-        solution is really possible.
     * spaces are striped from the beginning and end of addresses but no error is raised
-
-    See RFC 5322 but treat it with suspicion, there seems to exist no universally acknowledged test for a valid email!
     """
     if email_validator is None:
         import_email_validator()
@@ -734,12 +723,8 @@ def validate_email(value: Union[str]) -> Tuple[str, str]:
     email = value.strip()
 
     try:
-        email_validator.validate_email(email, check_deliverability=False)
+        parts = email_validator.validate_email(email, check_deliverability=False)
     except email_validator.EmailNotValidError as e:
-        raise errors.EmailError() from e
+        raise errors.EmailError(*e.args) from e
 
-    at_index = email.index('@')
-    local_part = email[:at_index]  # RFC 5321, local part must be case-sensitive.
-    global_part = email[at_index:].lower()
-
-    return name or local_part, local_part + global_part
+    return name or parts['local'], parts['email']

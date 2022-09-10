@@ -4,7 +4,6 @@ from .annotated_types import create_model_from_namedtuple, create_model_from_typ
 from .class_validators import root_validator, validator
 from .config import BaseConfig, ConfigDict, Extra
 from .decorator import validate_arguments
-from .env_settings import BaseSettings
 from .error_wrappers import ValidationError
 from .errors import *
 from .fields import Field, PrivateAttr, Required
@@ -13,7 +12,7 @@ from .networks import *
 from .parse import Protocol
 from .tools import *
 from .types import *
-from .version import VERSION, compiled
+from .version import VERSION
 
 __version__ = VERSION
 
@@ -34,8 +33,6 @@ __all__ = [
     'Extra',
     # decorator
     'validate_arguments',
-    # env_settings
-    'BaseSettings',
     # error_wrappers
     'ValidationError',
     # fields
@@ -126,6 +123,5 @@ __all__ = [
     'PastDate',
     'FutureDate',
     # version
-    'compiled',
     'VERSION',
 ]

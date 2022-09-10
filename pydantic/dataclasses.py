@@ -34,7 +34,20 @@ validation without altering default `M` behaviour.
 import sys
 from contextlib import contextmanager
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Generator, Optional, Type, TypeVar, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generator,
+    Optional,
+    Set,
+    Type,
+    TypeVar,
+    Union,
+    overload,
+)
 
 from typing_extensions import dataclass_transform
 
@@ -92,7 +105,7 @@ _T = TypeVar('_T')
 
 if sys.version_info >= (3, 10):
 
-    @dataclass_transform(kw_only_default=True, field_descriptors=(Field, FieldInfo))
+    @dataclass_transform(kw_only_default=True, field_specifiers=(Field, FieldInfo))
     @overload
     def dataclass(
         *,
@@ -108,7 +121,7 @@ if sys.version_info >= (3, 10):
     ) -> Callable[[Type[_T]], 'DataclassClassOrWrapper']:
         ...
 
-    @dataclass_transform(kw_only_default=True, field_descriptors=(Field, FieldInfo))
+    @dataclass_transform(kw_only_default=True, field_specifiers=(Field, FieldInfo))
     @overload
     def dataclass(
         _cls: Type[_T],
@@ -127,7 +140,7 @@ if sys.version_info >= (3, 10):
 
 else:
 
-    @dataclass_transform(kw_only_default=True, field_descriptors=(Field, FieldInfo))
+    @dataclass_transform(kw_only_default=True, field_specifiers=(Field, FieldInfo))
     @overload
     def dataclass(
         *,
@@ -142,7 +155,7 @@ else:
     ) -> Callable[[Type[_T]], 'DataclassClassOrWrapper']:
         ...
 
-    @dataclass_transform(kw_only_default=True, field_descriptors=(Field, FieldInfo))
+    @dataclass_transform(kw_only_default=True, field_specifiers=(Field, FieldInfo))
     @overload
     def dataclass(
         _cls: Type[_T],
@@ -159,7 +172,7 @@ else:
         ...
 
 
-@dataclass_transform(kw_only_default=True, field_descriptors=(Field, FieldInfo))
+@dataclass_transform(kw_only_default=True, field_specifiers=(Field, FieldInfo))
 def dataclass(
     _cls: Optional[Type[_T]] = None,
     *,
@@ -184,14 +197,14 @@ def dataclass(
     def wrap(cls: Type[Any]) -> 'DataclassClassOrWrapper':
         import dataclasses
 
-        if is_builtin_dataclass(cls):
+        if is_builtin_dataclass(cls) and _extra_dc_args(_cls) == _extra_dc_args(_cls.__bases__[0]):  # type: ignore
             dc_cls_doc = ''
             dc_cls = DataclassProxy(cls)
             default_validate_on_init = False
         else:
             dc_cls_doc = cls.__doc__ or ''  # needs to be done before generating dataclass
             if sys.version_info >= (3, 10):
-                dc_cls = dataclasses.dataclass(
+                dc_cls = dataclasses.dataclass(  # type: ignore[call-overload]
                     cls,
                     init=init,
                     repr=repr,
@@ -202,7 +215,7 @@ def dataclass(
                     kw_only=kw_only,
                 )
             else:
-                dc_cls = dataclasses.dataclass(  # type: ignore
+                dc_cls = dataclasses.dataclass(
                     cls, init=init, repr=repr, eq=eq, order=order, unsafe_hash=unsafe_hash, frozen=frozen
                 )
             default_validate_on_init = True
@@ -416,6 +429,14 @@ def _dataclass_validate_assignment_setattr(self: 'Dataclass', name: str, value: 
                 raise ValidationError([error_], self.__class__)
 
     object.__setattr__(self, name, value)
+
+
+def _extra_dc_args(cls: Type[Any]) -> Set[str]:
+    return {
+        x
+        for x in dir(cls)
+        if x not in getattr(cls, '__dataclass_fields__', {}) and not (x.startswith('__') and x.endswith('__'))
+    }
 
 
 def is_builtin_dataclass(_cls: Type[Any]) -> bool:

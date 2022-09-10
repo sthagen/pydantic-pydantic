@@ -1,3 +1,4 @@
+import sys
 from configparser import ConfigParser
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type as TypingType, Union
 
@@ -67,13 +68,12 @@ from pydantic.utils import is_valid_field
 try:
     from mypy.types import TypeVarDef  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover
-    # Backward-compatible with TypeVarDef from Mypy 0.910.
+    # Backward-compatible with TypeVarDef from Mypy 0.930.
     from mypy.types import TypeVarType as TypeVarDef
 
 CONFIGFILE_KEY = 'pydantic-mypy'
 METADATA_KEY = 'pydantic-mypy-metadata'
 BASEMODEL_FULLNAME = 'pydantic.main.BaseModel'
-BASESETTINGS_FULLNAME = 'pydantic.env_settings.BaseSettings'
 FIELD_FULLNAME = 'pydantic.fields.Field'
 DATACLASS_FULLNAME = 'pydantic.dataclasses.dataclass'
 
@@ -82,7 +82,8 @@ def parse_mypy_version(version: str) -> Tuple[int, ...]:
     return tuple(int(part) for part in version.split('+', 1)[0].split('.'))
 
 
-BUILTINS_NAME = 'builtins' if parse_mypy_version(mypy_version) >= (0, 930) else '__builtins__'
+MYPY_VERSION_TUPLE = parse_mypy_version(mypy_version)
+BUILTINS_NAME = 'builtins' if MYPY_VERSION_TUPLE >= (0, 930) else '__builtins__'
 
 
 def plugin(version: str) -> 'TypingType[Plugin]':
@@ -162,14 +163,18 @@ class PydanticPlugin(Plugin):
             # Functions which use `ParamSpec` can be overloaded, exposing the callable's types as a parameter
             # Pydantic calls the default factory without any argument, so we retrieve the first item
             if isinstance(default_factory_type, Overloaded):
-                if float(mypy_version) > 0.910:
-                    default_factory_type = default_factory_type.items[0]
-                else:
-                    # Mypy0.910 exposes the items of overloaded types in a function
-                    default_factory_type = default_factory_type.items()[0]  # type: ignore[operator]
+                default_factory_type = default_factory_type.items[0]
 
             if isinstance(default_factory_type, CallableType):
-                return default_factory_type.ret_type
+                ret_type = default_factory_type.ret_type
+                # mypy doesn't think `ret_type` has `args`, you'd think mypy should know,
+                # add this check in case it varies by version
+                args = getattr(ret_type, 'args', None)
+                if args:
+                    if all(isinstance(arg, TypeVarType) for arg in args):
+                        # Looks like the default factory is a type like `list` or `dict`, replace all args with `Any`
+                        ret_type.args = tuple(default_any_type for _ in args)  # type: ignore[attr-defined]
+                return ret_type
 
         return default_any_type
 
@@ -257,8 +262,7 @@ class PydanticModelTransformer:
             if info[field.name].type is None:
                 if not ctx.api.final_iteration:
                     ctx.api.defer()
-        is_settings = any(get_fullname(base) == BASESETTINGS_FULLNAME for base in info.mro[:-1])
-        self.add_initializer(fields, config, is_settings)
+        self.add_initializer(fields, config)
         self.add_construct_method(fields)
         self.set_frozen(fields, frozen=config.allow_mutation is False or config.frozen is True)
         info.metadata[METADATA_KEY] = {
@@ -399,7 +403,7 @@ class PydanticModelTransformer:
             all_fields = superclass_fields + all_fields
         return all_fields
 
-    def add_initializer(self, fields: List['PydanticModelField'], config: 'ModelConfigData', is_settings: bool) -> None:
+    def add_initializer(self, fields: List['PydanticModelField'], config: 'ModelConfigData') -> None:
         """
         Adds a fields-aware `__init__` method to the class.
 
@@ -408,9 +412,7 @@ class PydanticModelTransformer:
         ctx = self._ctx
         typed = self.plugin_config.init_typed
         use_alias = config.allow_population_by_field_name is not True
-        force_all_optional = is_settings or bool(
-            config.has_alias_generator and not config.allow_population_by_field_name
-        )
+        force_all_optional = bool(config.has_alias_generator and not config.allow_population_by_field_name)
         init_arguments = self.get_field_arguments(
             fields, typed=typed, force_all_optional=force_all_optional, use_alias=use_alias
         )
@@ -438,15 +440,10 @@ class PydanticModelTransformer:
         obj_type = ctx.api.named_type(f'{BUILTINS_NAME}.object')
         self_tvar_name = '_PydanticBaseModel'  # Make sure it does not conflict with other names in the class
         tvar_fullname = ctx.cls.fullname + '.' + self_tvar_name
-        tvd = TypeVarDef(self_tvar_name, tvar_fullname, -1, [], obj_type)
+        # requires mypy>0.910
+        self_type = TypeVarDef(self_tvar_name, tvar_fullname, -1, [], obj_type)
         self_tvar_expr = TypeVarExpr(self_tvar_name, tvar_fullname, [], obj_type)
         ctx.cls.info.names[self_tvar_name] = SymbolTableNode(MDEF, self_tvar_expr)
-
-        # Backward-compatible with TypeVarDef from Mypy 0.910.
-        if isinstance(tvd, TypeVarType):
-            self_type = tvd
-        else:
-            self_type = TypeVarType(tvd)  # type: ignore[call-arg]
 
         add_method(
             ctx,
@@ -454,7 +451,7 @@ class PydanticModelTransformer:
             construct_arguments,
             return_type=self_type,
             self_type=self_type,
-            tvar_def=tvd,
+            tvar_def=self_type,
             is_classmethod=True,
         )
 
@@ -819,19 +816,16 @@ def parse_toml(config_file: str) -> Optional[Dict[str, Any]]:
     if not config_file.endswith('.toml'):
         return None
 
-    read_mode = 'rb'
-    try:
-        import tomli as toml_
-    except ImportError:
-        # older versions of mypy have toml as a dependency, not tomli
-        read_mode = 'r'
+    if sys.version_info >= (3, 11):
+        import tomllib as toml_
+    else:
         try:
-            import toml as toml_  # type: ignore[no-redef]
+            import tomli as toml_
         except ImportError:  # pragma: no cover
             import warnings
 
             warnings.warn('No TOML parser installed, cannot read configuration from `pyproject.toml`.')
             return None
 
-    with open(config_file, read_mode) as rf:
-        return toml_.load(rf)  # type: ignore[arg-type]
+    with open(config_file, 'rb') as rf:
+        return toml_.load(rf)

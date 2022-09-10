@@ -1,5 +1,5 @@
 site_name: pydantic
-site_description: Data validation and settings management using Python type hints
+site_description: Data validation using Python type hints
 strict: true
 site_url: https://pydantic-docs.helpmanual.io/
 
@@ -52,7 +52,6 @@ nav:
   - usage/exporting_models.md
   - usage/dataclasses.md
   - usage/validation_decorator.md
-  - 'Settings management': usage/settings.md
   - usage/postponed_annotations.md
   - 'Usage with mypy': usage/mypy.md
   - 'Usage with devtools': usage/devtools.md
@@ -81,7 +80,7 @@ markdown_extensions:
     emoji_index: !!python/name:materialx.emoji.twemoji
     emoji_generator: !!python/name:materialx.emoji.to_svg
 - pymdownx.tabbed:
-    alternate_style: true 
+    alternate_style: true
 
 plugins:
 - search
