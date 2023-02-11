@@ -2,6 +2,7 @@ import itertools
 import math
 import os
 import re
+import sys
 import uuid
 from collections import OrderedDict, deque
 from datetime import date, datetime, time, timedelta
@@ -40,6 +41,7 @@ from pydantic import (
     UUID5,
     BaseModel,
     ByteSize,
+    ConfigDict,
     DirectoryPath,
     EmailStr,
     Field,
@@ -871,6 +873,7 @@ class BoolCastable:
         return True
 
 
+@pytest.mark.xfail(sys.platform.startswith('win'), reason='https://github.com/PyO3/pyo3/issues/2913', strict=False)
 @pytest.mark.parametrize(
     'field,value,result',
     [
@@ -1908,8 +1911,7 @@ def test_finite_float_config():
     class Model(BaseModel):
         a: float
 
-        class Config:
-            allow_inf_nan = False
+        model_config = ConfigDict(allow_inf_nan=False)
 
     assert Model(a=42).a == 42
     with pytest.raises(ValidationError) as exc_info:
@@ -2062,6 +2064,7 @@ def test_uuid_error():
         Model(v=None)
 
 
+@pytest.mark.xfail(sys.platform.startswith('win'), reason='https://github.com/PyO3/pyo3/issues/2913', strict=False)
 def test_uuid_validation():
     class UUIDModel(BaseModel):
         a: UUID1
@@ -2120,12 +2123,11 @@ def test_uuid_validation():
         (False, '  123  ', '  123  '),
     ],
 )
-def test_anystr_strip_whitespace(enabled, str_check, result_str_check):
+def test_str_strip_whitespace(enabled, str_check, result_str_check):
     class Model(BaseModel):
         str_check: str
 
-        class Config:
-            anystr_strip_whitespace = enabled
+        model_config = ConfigDict(str_strip_whitespace=enabled)
 
     m = Model(str_check=str_check)
     assert m.str_check == result_str_check
@@ -2135,12 +2137,11 @@ def test_anystr_strip_whitespace(enabled, str_check, result_str_check):
     'enabled,str_check,result_str_check',
     [(True, 'ABCDefG', 'ABCDEFG'), (False, 'ABCDefG', 'ABCDefG')],
 )
-def test_anystr_upper(enabled, str_check, result_str_check):
+def test_str_to_upper(enabled, str_check, result_str_check):
     class Model(BaseModel):
         str_check: str
 
-        class Config:
-            anystr_upper = enabled
+        model_config = ConfigDict(str_to_upper=enabled)
 
     m = Model(str_check=str_check)
 
@@ -2151,12 +2152,11 @@ def test_anystr_upper(enabled, str_check, result_str_check):
     'enabled,str_check,result_str_check',
     [(True, 'ABCDefG', 'abcdefg'), (False, 'ABCDefG', 'ABCDefG')],
 )
-def test_anystr_lower(enabled, str_check, result_str_check):
+def test_str_to_lower(enabled, str_check, result_str_check):
     class Model(BaseModel):
         str_check: str
 
-        class Config:
-            anystr_lower = enabled
+        model_config = ConfigDict(str_to_lower=enabled)
 
     m = Model(str_check=str_check)
 
@@ -3427,7 +3427,7 @@ def test_deque_json():
     class Model(BaseModel):
         v: Deque[int]
 
-    assert Model(v=deque((1, 2, 3))).model_dump_json() == '{"v": [1, 2, 3]}'
+    assert Model(v=deque((1, 2, 3))).model_dump_json() == b'{"v":[1,2,3]}'
 
 
 @pytest.mark.parametrize('value_type', (None, type(None), None.__class__, Literal[None]))

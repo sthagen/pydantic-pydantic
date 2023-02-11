@@ -3,7 +3,7 @@ from typing import Any, List, Optional
 
 import pytest
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from pydantic.fields import Undefined
 
 
@@ -23,7 +23,8 @@ def test_simple_construct():
 def test_construct_misuse():
     m = Model.model_construct(b='foobar')
     assert m.b == 'foobar'
-    assert m.model_dump() == {'b': 'foobar'}
+    with pytest.warns(UserWarning, match='Expected `int` but got `str`'):
+        assert m.model_dump() == {'b': 'foobar'}
     with pytest.raises(AttributeError, match="'Model' object has no attribute 'a'"):
         print(m.a)
 
@@ -39,7 +40,7 @@ def test_construct_fields_set():
 def test_construct_allow_extra():
     """model_construct() should allow extra fields"""
 
-    class Foo(BaseModel):
+    class Foo(BaseModel, extra='allow'):
         x: int
 
     assert Foo.model_construct(x=1, y=2).model_dump() == {'x': 1, 'y': 2}
@@ -294,31 +295,11 @@ def test_copy_undefined(ModelTwo):
     assert not hasattr(m3, '__foo__')
 
 
-@pytest.mark.xfail(reason='working on V2')
-def test_immutable_copy_with_allow_mutation():
-    class Model(BaseModel):
-        a: int
-        b: int
-
-        class Config:
-            allow_mutation = False
-
-    m = Model(a=40, b=10)
-    assert m == m.copy()
-
-    m2 = m.copy(update={'b': 12})
-    assert repr(m2) == 'Model(a=40, b=12)'
-    with pytest.raises(TypeError):
-        m2.b = 13
-
-
 def test_immutable_copy_with_frozen():
     class Model(BaseModel):
+        model_config = ConfigDict(frozen=True)
         a: int
         b: int
-
-        class Config:
-            frozen = True
 
     m = Model(a=40, b=10)
     assert m == m.copy()

@@ -162,7 +162,6 @@ def model_schema(
 
 
 def get_field_info_schema(field: ModelField, schema_overrides: bool = False) -> Tuple[Dict[str, Any], bool]:
-
     # If no title is explicitly set, we don't set title in the schema for enums.
     # The behaviour is the same as `BaseModel` reference, where the default title
     # is in the definitions part of the schema.
@@ -347,7 +346,7 @@ def get_flat_models_from_field(field: ModelField, known_models: TypeModelSet) ->
 
     flat_models: TypeModelSet = set()
 
-    field_type = field.type_
+    field_type = field.annotation
     if lenient_issubclass(getattr(field_type, '__pydantic_model__', None), BaseModel):
         field_type = field_type.__pydantic_model__
 
@@ -410,7 +409,7 @@ def field_type_schema(
     Take a single ``field`` and generate the schema for its type only, not including additional
     information as title, etc. Also return additional schema definitions, from sub-models.
     """
-    from .main import BaseModel  # noqa: F811
+    from .main import BaseModel
 
     definitions = {}
     nested_models: Set[str] = set()
@@ -530,7 +529,7 @@ def model_process_schema(
         s = enum_process_schema(model, field=field)
         return s, {}, set()
     model = cast(Type['BaseModel'], model)
-    s = {'title': model.__config__.title or model.__name__}
+    s = {'title': model.model_config['title'] or model.__name__}
     doc = getdoc(model)
     if doc:
         s['description'] = doc
@@ -544,7 +543,7 @@ def model_process_schema(
         known_models=known_models,
     )
     s.update(m_schema)
-    schema_extra = model.__config__.schema_extra
+    schema_extra = model.model_config['schema_extra']
     if callable(schema_extra):
         if len(signature(schema_extra).parameters) == 1:
             schema_extra(s)
@@ -599,12 +598,12 @@ def model_type_schema(
                 required.append(k)
     if ROOT_KEY in properties:
         out_schema = properties[ROOT_KEY]
-        out_schema['title'] = model.__config__.title or model.__name__
+        out_schema['title'] = model.model_config['title'] or model.__name__
     else:
         out_schema = {'type': 'object', 'properties': properties}
         if required:
             out_schema['required'] = required
-    if model.__config__.extra == 'forbid':
+    if model.model_config['extra'] == 'forbid':
         out_schema['additionalProperties'] = False
     return out_schema, definitions, nested_models
 
@@ -995,7 +994,7 @@ def get_annotation_with_constraints(annotation: Any, field_info: FieldInfo) -> T
     """
     used_constraints: Set[str] = set()
 
-    def go(type_: Any) -> Type[Any]:
+    def go(type_: Any) -> Type[Any]:  # noqa: C901
         if (
             is_literal_type(type_)
             or isinstance(type_, ForwardRef)

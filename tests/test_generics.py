@@ -103,9 +103,8 @@ def test_methods_are_inherited():
 
 @pytest.mark.xfail(reason='working on V2')
 def test_config_is_inherited():
-    class CustomGenericModel(GenericModel):
-        class Config:
-            allow_mutation = False
+    class CustomGenericModel(GenericModel, frozen=True):
+        ...
 
     T = TypeVar('T')
 
@@ -249,11 +248,8 @@ def test_cover_cache():
 def test_generic_config():
     data_type = TypeVar('data_type')
 
-    class Result(GenericModel, Generic[data_type]):
+    class Result(GenericModel, Generic[data_type], frozen=True):
         data: data_type
-
-        class Config:
-            allow_mutation = False
 
     result = Result[int](data=1)
     assert result.data == 1
@@ -686,7 +682,6 @@ def test_generic_model_from_function_pickle_fail(create_module):
 
 @pytest.mark.xfail(reason='working on V2')
 def test_generic_model_redefined_without_cache_fail(create_module, monkeypatch):
-
     # match identity checker otherwise we never get to the redefinition check
     monkeypatch.setattr('pydantic.generics.all_identical', lambda left, right: False)
 
@@ -879,7 +874,6 @@ def test_replace_types_with_user_defined_generic_type_field():
         pass
 
     class Model(GenericModel, Generic[T, KT, VT]):
-
         map_field: GenericMapping[KT, VT]
         list_field: GenericList[T]
 
@@ -1110,7 +1104,7 @@ def test_generic_recursive_models(create_module):
         T = TypeVar('T')
 
         class Model1(GenericModel, Generic[T]):
-            ref: 'Model2[T]'  # noqa: F821
+            ref: 'Model2[T]'
 
         class Model2(GenericModel, Generic[T]):
             ref: Union[T, Model1[T]]
@@ -1182,7 +1176,6 @@ def test_generic_with_user_defined_generic_field():
         pass
 
     class Model(GenericModel, Generic[T]):
-
         field: GenericList[T]
 
     model = Model[int](field=[5])

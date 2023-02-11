@@ -7,8 +7,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import pytest
 from typing_extensions import Literal
 
-from pydantic import BaseModel, Extra, Field, PydanticUserError, ValidationError, errors, validator
-from pydantic.validator_functions import root_validator
+from pydantic import BaseModel, ConfigDict, Extra, Field, PydanticUserError, ValidationError, errors, validator
+from pydantic.decorators import root_validator
 
 
 @pytest.mark.xfail(reason='working on V2')
@@ -174,9 +174,7 @@ def validate_assignment_model_fixture():
         def double_c(cls, v):
             return v * 2
 
-        class Config:
-            validate_assignment = True
-            extra = Extra.allow
+        model_config = ConfigDict(validate_assignment=True, extra=Extra.allow)
 
     return ValidateAssignmentModel
 
@@ -245,8 +243,7 @@ def test_validating_assignment_values_dict():
             else:
                 return b
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
     model = ModelTwo(m=ModelOne(a=1), b=2)
     assert model.b == 3
@@ -304,7 +301,7 @@ def test_duplicates():
             def duplicate_name(cls, v):
                 return v
 
-            @validator('b')  # noqa
+            @validator('b')
             def duplicate_name(cls, v):  # noqa
                 return v
 
@@ -455,7 +452,7 @@ def test_invalid_field():
                 return v
 
     assert str(exc_info.value) == (
-        "Validators defined with incorrect fields: check_b "  # noqa: Q000
+        "Validators defined with incorrect fields: check_b "
         "(use check_fields=False if you're inheriting from the model and intended this)"
     )
 
@@ -889,7 +886,7 @@ def test_root_validator_repeat():
             def root_validator_repeated(cls, values):
                 return values
 
-            @root_validator  # noqa: F811
+            @root_validator
             def root_validator_repeated(cls, values):  # noqa: F811
                 return values
 
@@ -905,7 +902,7 @@ def test_root_validator_repeat2():
             def repeat_validator(cls, v):
                 return v
 
-            @root_validator(pre=True)  # noqa: F811
+            @root_validator(pre=True)
             def repeat_validator(cls, values):  # noqa: F811
                 return values
 
@@ -954,8 +951,7 @@ def test_root_validator_types():
             root_val_values = cls, values
             return values
 
-        class Config:
-            extra = Extra.allow
+        model_config = ConfigDict(extra=Extra.allow)
 
     assert Model(b='bar', c='wobble').model_dump() == {'a': 1, 'b': 'bar', 'c': 'wobble'}
 
@@ -1028,20 +1024,20 @@ def declare_with_reused_validators(include_root, allow_1, allow_2, allow_3):
         def duplicate_name(cls, v):
             return v
 
-        @validator('b', allow_reuse=allow_2)  # noqa F811
+        @validator('b', allow_reuse=allow_2)
         def duplicate_name(cls, v):  # noqa F811
             return v
 
         if include_root:
 
-            @root_validator(allow_reuse=allow_3)  # noqa F811
+            @root_validator(allow_reuse=allow_3)
             def duplicate_name(cls, values):  # noqa F811
                 return values
 
 
 @pytest.fixture
 def reset_tracked_validators():
-    from pydantic.validator_functions import _FUNCS
+    from pydantic.decorators import _FUNCS
 
     original_tracked_validators = set(_FUNCS)
     yield
@@ -1139,8 +1135,7 @@ def test_assignment_validator_cls():
     class Model(BaseModel):
         name: str
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
         @validator('name')
         def check_foo(cls, value):
@@ -1220,7 +1215,7 @@ def test_nested_literal_validator():
 @pytest.mark.xfail(reason='working on V2')
 def test_union_literal_with_constraints():
     class Model(BaseModel, validate_assignment=True):
-        x: Union[Literal[42], Literal['pika']] = Field(allow_mutation=False)
+        x: Union[Literal[42], Literal['pika']] = Field(frozen=True)
 
     m = Model(x=42)
     with pytest.raises(TypeError):
@@ -1236,8 +1231,7 @@ def test_field_that_is_being_validated_is_excluded_from_validator_values(mocker)
         bar: str = Field(alias='pika')
         baz: str
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
         @validator('foo')
         def validate_foo(cls, v, values):
@@ -1270,8 +1264,7 @@ def test_exceptions_in_field_validators_restore_original_field_value():
     class Model(BaseModel):
         foo: str
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
         @validator('foo')
         def validate_foo(cls, v):
@@ -1328,8 +1321,7 @@ def test_validating_assignment_pre_root_validator_fail():
         current_value: float = Field(..., alias='current')
         max_value: float
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
         @root_validator(pre=True)
         def values_are_not_string(cls, values):
@@ -1355,8 +1347,7 @@ def test_validating_assignment_post_root_validator_fail():
         current_value: float = Field(..., alias='current')
         max_value: float
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
         @root_validator
         def current_lessequal_max(cls, values):
@@ -1403,8 +1394,7 @@ def test_root_validator_many_values_change():
         height: float
         area: float = None
 
-        class Config:
-            validate_assignment = True
+        model_config = ConfigDict(validate_assignment=True)
 
         @root_validator
         def set_area(cls, values):

@@ -14,9 +14,9 @@ from typing import Any
 
 import typing_extensions
 
-from ._internal import _model_construction, _repr, _typing_extra, _utils, _validation_functions
+from ._internal import _decorators, _model_construction, _repr, _typing_extra, _utils
 from ._internal._fields import Undefined
-from .config import BaseConfig, Extra, build_config, inherit_config
+from .config import BaseConfig, ConfigDict, Extra, build_config, get_config
 from .errors import PydanticUserError
 from .fields import Field, FieldInfo, ModelPrivateAttr
 from .json import custom_pydantic_encoder, pydantic_encoder
@@ -25,13 +25,15 @@ from .schema import default_ref_template, model_schema
 if typing.TYPE_CHECKING:
     from inspect import Signature
 
-    from pydantic_core import CoreSchema, SchemaValidator
+    from pydantic_core import CoreSchema, SchemaSerializer, SchemaValidator
 
     from ._internal._utils import AbstractSetIntStr, MappingIntStrAny
 
     AnyClassMethod = classmethod[Any]
     TupleGenerator = typing.Generator[tuple[str, Any], None, None]
     Model = typing.TypeVar('Model', bound='BaseModel')
+    # should be `set[int] | set[str] | dict[int, IncEx] | dict[str, IncEx] | None`, but mypy can't cope
+    IncEx = set[int] | set[str] | dict[int, Any] | dict[str, Any] | None
 
 __all__ = 'BaseModel', 'create_model'
 
@@ -47,11 +49,8 @@ _base_class_defined = False
 class ModelMetaclass(ABCMeta):
     def __new__(mcs, cls_name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], **kwargs: Any) -> type:
         if _base_class_defined:
-            __config__, new_model_config = build_config(cls_name, bases, namespace, kwargs)
-            if new_model_config is not None:
-                namespace['Config'] = new_model_config
-            namespace['__config__'] = __config__
-
+            config_new = build_config(cls_name, bases, namespace, kwargs)
+            namespace['model_config'] = config_new
             namespace['__private_attributes__'] = private_attributes = _model_construction.inspect_namespace(namespace)
             if private_attributes:
                 slots: set[str] = set(namespace.get('__slots__', ()))
@@ -72,19 +71,24 @@ class ModelMetaclass(ABCMeta):
             elif 'model_post_init' in namespace:
                 namespace['__pydantic_post_init__'] = namespace['model_post_init']
 
-            validator_functions = _validation_functions.ValidationFunctions(bases)
-            namespace['__pydantic_validator_functions__'] = validator_functions
+            validator_functions = _decorators.ValidationFunctions(bases)
+            namespace[validator_functions.model_attribute] = validator_functions
+
+            serializer_functions = _decorators.SerializationFunctions(bases)
+            namespace[serializer_functions.model_attribute] = serializer_functions
 
             for name, value in namespace.items():
-                validator_functions.extract_validator(name, value)
+                found_validator = validator_functions.extract_decorator(name, value)
+                if not found_validator:
+                    serializer_functions.extract_decorator(name, value)
 
-            if __config__.json_encoders:
-                json_encoder = partial(custom_pydantic_encoder, __config__.json_encoders)
+            if config_new['json_encoders']:
+                json_encoder = partial(custom_pydantic_encoder, config_new['json_encoders'])
             else:
                 json_encoder = pydantic_encoder  # type: ignore[assignment]
             namespace['__json_encoder__'] = staticmethod(json_encoder)
 
-            if '__hash__' not in namespace and __config__.frozen:
+            if '__hash__' not in namespace and config_new['frozen']:
 
                 def hash_func(self_: Any) -> int:
                     return hash(self_.__class__) + hash(tuple(self_.__dict__.values()))
@@ -97,6 +101,7 @@ class ModelMetaclass(ABCMeta):
                 cls,
                 cls_name,
                 validator_functions,
+                serializer_functions,
                 bases,
                 types_namespace=_typing_extra.parent_frame_namespace(),
                 raise_errors=False,
@@ -112,17 +117,18 @@ class ModelMetaclass(ABCMeta):
 
         See #3829 and python/cpython#92810
         """
-        return hasattr(instance, 'model_fields') and super().__instancecheck__(instance)
+        return hasattr(instance, '__pydantic_validator__') and super().__instancecheck__(instance)
 
 
 class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
     if typing.TYPE_CHECKING:
         # populated by the metaclass, defined here to help IDEs only
         __pydantic_validator__: typing.ClassVar[SchemaValidator]
-        __pydantic_validation_schema__: typing.ClassVar[CoreSchema]
-        __pydantic_validator_functions__: typing.ClassVar[_validation_functions.ValidationFunctions]
+        __pydantic_core_schema__: typing.ClassVar[CoreSchema]
+        __pydantic_serializer__: typing.ClassVar[SchemaSerializer]
+        __pydantic_validator_functions__: typing.ClassVar[_decorators.ValidationFunctions]
+        __pydantic_serializer_functions__: typing.ClassVar[_decorators.SerializationFunctions]
         model_fields: typing.ClassVar[dict[str, FieldInfo]] = {}
-        __config__: typing.ClassVar[type[BaseConfig]] = BaseConfig
         __json_encoder__: typing.ClassVar[typing.Callable[[Any], Any]] = lambda x: x  # noqa: E731
         __schema_cache__: typing.ClassVar[dict[Any, Any]] = {}
         __signature__: typing.ClassVar[Signature]
@@ -134,7 +140,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             'Pydantic models should inherit from BaseModel, BaseModel cannot be instantiated directly'
         )
 
-    Config = BaseConfig
+    model_config = ConfigDict()
     __slots__ = '__dict__', '__fields_set__'
     __doc__ = ''  # Null out the Representation docstring
     __pydantic_model_complete__ = False
@@ -156,6 +162,26 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         if hasattr(__pydantic_self__, '__pydantic_post_init__'):
             __pydantic_self__.__pydantic_post_init__(context=None)
 
+    @classmethod
+    def model_validate(cls: type[Model], obj: Any) -> Model:
+        values, fields_set = cls.__pydantic_validator__.validate_python(obj)
+        m = cls.__new__(cls)
+        _object_setattr(m, '__dict__', values)
+        _object_setattr(m, '__fields_set__', fields_set)
+        if hasattr(cls, '__pydantic_post_init__'):
+            cls.__pydantic_post_init__(context=None)  # type: ignore[attr-defined]
+        return m
+
+    @classmethod
+    def model_validate_json(cls: type[Model], json_data: str | bytes | bytearray) -> Model:
+        values, fields_set = cls.__pydantic_validator__.validate_json(json_data)
+        m = cls.__new__(cls)
+        _object_setattr(m, '__dict__', values)
+        _object_setattr(m, '__fields_set__', fields_set)
+        if hasattr(cls, '__pydantic_post_init__'):
+            cls.__pydantic_post_init__(context=None)  # type: ignore[attr-defined]
+        return m
+
     if typing.TYPE_CHECKING:
         # model_after_init is called after at the end of `__init__` if it's defined
         def model_post_init(self, **kwargs: Any) -> None:
@@ -165,13 +191,13 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
     def __setattr__(self, name, value):
         if name.startswith('_'):
             _object_setattr(self, name, value)
-        elif self.__config__.frozen:
+        elif self.model_config['frozen']:
             raise TypeError(f'"{self.__class__.__name__}" is frozen and does not support item assignment')
-        elif self.__config__.validate_assignment:
+        elif self.model_config['validate_assignment']:
             values, fields_set = self.__pydantic_validator__.validate_assignment(name, value, self.__dict__)
             _object_setattr(self, '__dict__', values)
             self.__fields_set__ |= fields_set
-        elif self.__config__.extra is not Extra.allow and name not in self.model_fields:
+        elif self.model_config['extra'] is not Extra.allow and name not in self.model_fields:
             # TODO - matching error
             raise ValueError(f'"{self.__class__.__name__}" object has no field "{name}"')
         else:
@@ -195,91 +221,60 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
     def model_dump(
         self,
         *,
-        include: AbstractSetIntStr | MappingIntStrAny | None = None,
-        exclude: AbstractSetIntStr | MappingIntStrAny | None = None,
+        mode: typing_extensions.Literal['json', 'python'] | str = 'python',
+        include: IncEx = None,
+        exclude: IncEx = None,
         by_alias: bool = False,
-        skip_defaults: bool | None = None,
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
+        round_trip: bool = False,
+        warnings: bool = True,
     ) -> dict[str, Any]:
         """
         Generate a dictionary representation of the model, optionally specifying which fields to include or exclude.
-
         """
-        if skip_defaults is not None:
-            warnings.warn(
-                f'{self.__class__.__name__}.model_dump(): "skip_defaults" is deprecated'
-                ' and replaced by "exclude_unset"',
-                DeprecationWarning,
-            )
-            exclude_unset = skip_defaults
-
-        return dict(
-            self._iter(
-                to_dict=True,
-                by_alias=by_alias,
-                include=include,
-                exclude=exclude,
-                exclude_unset=exclude_unset,
-                exclude_defaults=exclude_defaults,
-                exclude_none=exclude_none,
-            )
+        return self.__pydantic_serializer__.to_python(
+            self,
+            mode=mode,
+            by_alias=by_alias,
+            include=include,
+            exclude=exclude,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            exclude_none=exclude_none,
+            round_trip=round_trip,
+            warnings=warnings,
         )
 
     def model_dump_json(
         self,
         *,
-        include: AbstractSetIntStr | MappingIntStrAny | None = None,
-        exclude: AbstractSetIntStr | MappingIntStrAny | None = None,
+        indent: int | None = None,
+        include: IncEx = None,
+        exclude: IncEx = None,
         by_alias: bool = False,
-        skip_defaults: bool | None = None,
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
-        encoder: typing.Callable[[Any], Any] | None = None,
-        models_as_dict: bool = True,
-        **dumps_kwargs: Any,
-    ) -> str:
+        round_trip: bool = False,
+        warnings: bool = True,
+    ) -> bytes:
         """
         Generate a JSON representation of the model, `include` and `exclude` arguments as per `dict()`.
-
-        `encoder` is an optional function to supply as `default` to json.dumps(), other arguments as per `json.dumps()`.
         """
-        if skip_defaults is not None:
-            warnings.warn(
-                f'{self.__class__.__name__}.model_dump_json(): "skip_defaults" is deprecated'
-                ' and replaced by "exclude_unset"',
-                DeprecationWarning,
-            )
-            exclude_unset = skip_defaults
-        encoder = typing.cast(typing.Callable[[Any], Any], encoder or self.__json_encoder__)
-
-        # We don't directly call `self.model_dump()`, which does exactly this with `to_dict=True`
-        # because we want to be able to keep raw `BaseModel` instances and not as `dict`.
-        # This allows users to write custom JSON encoders for given `BaseModel` classes.
-        data = dict(
-            self._iter(
-                to_dict=models_as_dict,
-                by_alias=by_alias,
-                include=include,
-                exclude=exclude,
-                exclude_unset=exclude_unset,
-                exclude_defaults=exclude_defaults,
-                exclude_none=exclude_none,
-            )
+        return self.__pydantic_serializer__.to_json(
+            self,
+            indent=indent,
+            include=include,
+            exclude=exclude,
+            by_alias=by_alias,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            exclude_none=exclude_none,
+            round_trip=round_trip,
+            warnings=warnings,
         )
-        return self.__config__.json_dumps(data, default=encoder, **dumps_kwargs)
-
-    @classmethod
-    def model_validate(cls: type[Model], obj: Any) -> Model:
-        values, fields_set = cls.__pydantic_validator__.validate_python(obj)
-        m = cls.__new__(cls)
-        _object_setattr(m, '__dict__', values)
-        _object_setattr(m, '__fields_set__', fields_set)
-        if hasattr(cls, '__pydantic_post_init__'):
-            cls.__pydantic_post_init__(context=None)  # type: ignore[attr-defined]
-        return m
 
     @classmethod
     def from_orm(cls: type[Model], obj: Any) -> Model:
@@ -382,7 +377,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
     ) -> str:
         from .json import pydantic_encoder
 
-        return cls.__config__.json_dumps(
+        return cls.model_config['json_dumps'](
             cls.model_json_schema(by_alias=by_alias, ref_template=ref_template),
             default=pydantic_encoder,
             **dumps_kwargs,
@@ -401,7 +396,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         exclude_defaults: bool,
         exclude_none: bool,
     ) -> Any:
-
         if isinstance(v, BaseModel):
             if to_dict:
                 return v.model_dump(
@@ -454,7 +448,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
 
             return v.__class__(*seq_args) if _typing_extra.is_namedtuple(v.__class__) else v.__class__(seq_args)
 
-        elif isinstance(v, Enum) and getattr(cls.Config, 'use_enum_values', False):
+        elif isinstance(v, Enum) and getattr(cls.model_config, 'use_enum_values', False):
             return v.value
 
         else:
@@ -480,6 +474,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
                 cls,
                 cls.__name__,
                 cls.__pydantic_validator_functions__,
+                cls.__pydantic_serializer_functions__,
                 cls.__bases__,
                 raise_errors=raise_errors,
                 types_namespace=types_namespace,
@@ -501,7 +496,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         exclude_defaults: bool = False,
         exclude_none: bool = False,
     ) -> 'TupleGenerator':
-
         # Merge field set excludes with explicit exclude parameter with explicit overriding field set options.
         # The extra "is not None" guards are not logically necessary but optimizes performance for the simple case.
         # if exclude is not None or self.__exclude_fields__ is not None:
@@ -600,7 +594,7 @@ _base_class_defined = True
 def create_model(
     __model_name: str,
     *,
-    __config__: type[BaseConfig] | None = None,
+    __config__: ConfigDict | type[BaseConfig] | None = None,
     __base__: None = None,
     __module__: str = __name__,
     __validators__: dict[str, AnyClassMethod] = None,
@@ -614,7 +608,7 @@ def create_model(
 def create_model(
     __model_name: str,
     *,
-    __config__: type[BaseConfig] | None = None,
+    __config__: ConfigDict | type[BaseConfig] | None = None,
     __base__: type[Model] | tuple[type[Model], ...],
     __module__: str = __name__,
     __validators__: dict[str, AnyClassMethod] = None,
@@ -627,7 +621,7 @@ def create_model(
 def create_model(
     __model_name: str,
     *,
-    __config__: type[BaseConfig] | None = None,
+    __config__: ConfigDict | type[BaseConfig] | None = None,
     __base__: type[Model] | tuple[type[Model], ...] | None = None,
     __module__: str = __name__,
     __validators__: dict[str, AnyClassMethod] = None,
@@ -638,14 +632,14 @@ def create_model(
     """
     Dynamically create a model.
     :param __model_name: name of the created model
-    :param __config__: config class to use for the new model
+    :param __config__: config dict/class to use for the new model
     :param __base__: base class for the new model to inherit from
     :param __module__: module of the created model
     :param __validators__: a dict of method names and @validator class methods
     :param __cls_kwargs__: a dict for class creation
     :param __slots__: Deprecated, `__slots__` should not be passed to `create_model`
     :param field_definitions: fields of the model (or extra fields if a base is supplied)
-        in the format `<name>=(<type>, <default default>)` or `<name>=<default value>, e.g.
+        in the format `<name>=(<type>, <default value>)` or `<name>=<default value>, e.g.
         `foobar=(str, ...)` or `foobar=123`, or, for complex use-cases, in the format
         `<name>=<Field>` or `<name>=(<type>, <FieldInfo>)`, e.g.
         `foo=Field(datetime, default_factory=datetime.utcnow, alias='bar')` or
@@ -692,7 +686,7 @@ def create_model(
         namespace.update(__validators__)
     namespace.update(fields)
     if __config__:
-        namespace['Config'] = inherit_config(__config__, BaseConfig)
+        namespace['model_config'] = get_config(__config__)
     resolved_bases = resolve_bases(__base__)
     meta, ns, kwds = prepare_class(__model_name, resolved_bases, kwds=__cls_kwargs__)
     if resolved_bases is not __base__:
