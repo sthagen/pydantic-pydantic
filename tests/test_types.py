@@ -24,6 +24,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    TypeVar,
     Union,
 )
 from uuid import UUID
@@ -1138,7 +1139,7 @@ def test_string_success():
     class MoreStringsModel(BaseModel):
         str_strip_enabled: constr(strip_whitespace=True)
         str_strip_disabled: constr(strip_whitespace=False)
-        str_regex: constr(pattern=r'^xxx\d{3}$') = ...  # noqa: F722
+        str_regex: constr(pattern=r'^xxx\d{3}$') = ...
         str_min_length: constr(min_length=5) = ...
         str_email: EmailStr = ...
         name_email: NameEmail = ...
@@ -1164,7 +1165,7 @@ def test_string_success():
 @pytest.mark.skipif(not email_validator, reason='email_validator not installed')
 def test_string_fails():
     class MoreStringsModel(BaseModel):
-        str_regex: constr(pattern=r'^xxx\d{3}$') = ...  # noqa: F722
+        str_regex: constr(pattern=r'^xxx\d{3}$') = ...
         str_min_length: constr(min_length=5) = ...
         str_email: EmailStr = ...
         name_email: NameEmail = ...
@@ -3596,3 +3597,28 @@ def test_union_typeddict():
         d: Union[Dict2, Dict1]
 
     assert M(d=dict(foo='baz')).d == {'foo': 'baz'}
+
+
+def test_custom_generic_containers():
+    T = TypeVar('T')
+
+    class GenericList(List[T]):
+        pass
+
+    class Model(BaseModel):
+        field: GenericList[int]
+
+    model = Model(field=['1', '2'])
+    assert model.field == [1, 2]
+    assert isinstance(model.field, GenericList)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(field=['a'])
+    assert exc_info.value.errors() == [
+        {
+            'input': 'a',
+            'loc': ('field', 0),
+            'msg': 'Input should be a valid integer, unable to parse string as an ' 'integer',
+            'type': 'int_parsing',
+        }
+    ]

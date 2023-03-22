@@ -1,6 +1,7 @@
 import sys
 from configparser import ConfigParser
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type as TypingType, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Type as TypingType
 
 from mypy.errorcodes import ErrorCode
 from mypy.nodes import (
@@ -158,7 +159,7 @@ class PydanticPlugin(Plugin):
         info_metaclass = ctx.cls.info.declared_metaclass
         assert info_metaclass, "callback not passed from 'get_metaclass_hook'"
         if getattr(info_metaclass.type, 'dataclass_transform_spec', None):
-            info_metaclass.type.dataclass_transform_spec = None  # type: ignore[attr-defined]
+            info_metaclass.type.dataclass_transform_spec = None
 
     def _pydantic_field_callback(self, ctx: FunctionContext) -> 'Type':
         """
@@ -542,13 +543,26 @@ class PydanticModelTransformer:
 
         This is the same approach used by the attrs and dataclasses plugins.
         """
-        info = self._ctx.cls.info
+        ctx = self._ctx
+        info = ctx.cls.info
         for field in fields:
             sym_node = info.names.get(field.name)
             if sym_node is not None:
                 var = sym_node.node
-                assert isinstance(var, Var)
-                var.is_property = frozen
+                if isinstance(var, Var):
+                    var.is_property = frozen
+                elif isinstance(var, PlaceholderNode) and not ctx.api.final_iteration:
+                    # See https://github.com/pydantic/pydantic/issues/5191 to hit this branch for test coverage
+                    ctx.api.defer()
+                else:  # pragma: no cover
+                    # I don't know whether it's possible to hit this branch, but I've added it for safety
+                    try:
+                        var_str = str(var)
+                    except TypeError:
+                        # This happens for PlaceholderNode; perhaps it will happen for other types in the future..
+                        var_str = repr(var)
+                    detail = f'sym_node.node: {var_str} (of type {var.__class__})'
+                    error_unexpected_behavior(detail, ctx.api, ctx.cls)
             else:
                 var = field.to_var(info, use_alias=False)
                 var.info = info
@@ -771,7 +785,9 @@ def error_required_dynamic_aliases(api: SemanticAnalyzerPluginInterface, context
     api.fail('Required dynamic aliases disallowed', context, code=ERROR_ALIAS)
 
 
-def error_unexpected_behavior(detail: str, api: CheckerPluginInterface, context: Context) -> None:  # pragma: no cover
+def error_unexpected_behavior(
+    detail: str, api: Union[CheckerPluginInterface, SemanticAnalyzerPluginInterface], context: Context
+) -> None:  # pragma: no cover
     # Can't think of a good way to test this, but I confirmed it renders as desired by adding to a non-error path
     link = 'https://github.com/pydantic/pydantic/issues/new/choose'
     full_message = f'The pydantic mypy plugin ran into unexpected behavior: {detail}\n'

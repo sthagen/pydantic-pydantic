@@ -9,7 +9,8 @@ import re
 import sys
 import typing
 import warnings
-from typing import TYPE_CHECKING, Any, ForwardRef
+from inspect import Signature, signature
+from typing import TYPE_CHECKING, Any, Callable, ForwardRef, Mapping
 
 from annotated_types import BaseMetadata, GroupedMetadata
 from pydantic_core import SchemaError, SchemaValidator, core_schema
@@ -190,9 +191,11 @@ class GenerateSchema:
                 return get_model_self_schema(resolved_model)[0]
 
         try:
-            if obj in {bool, int, float, str, bytes, list, set, frozenset, tuple, dict}:
+            if obj in {bool, int, float, str, bytes, list, set, frozenset, dict}:
                 # Note: obj may fail to be hashable if it has an unhashable annotation
                 return {'type': obj.__name__}
+            elif obj is tuple:
+                return {'type': 'tuple-variable'}
         except TypeError:  # obj not hashable; can happen due to unhashable annotations
             pass
 
@@ -216,12 +219,21 @@ class GenerateSchema:
         elif obj == re.Pattern:
             return self._pattern_schema(obj)
         elif isinstance(obj, type):
+            if obj is dict:
+                return self._dict_schema(obj)
             if issubclass(obj, dict):
+                # TODO: We would need to handle generic subclasses of certain typing dict subclasses here
+                #   This includes subclasses of typing.Counter, typing.DefaultDict, and typing.OrderedDict
+                #   Note also that we may do a better job of handling typing.DefaultDict by inspecting its arguments.
                 return self._dict_subclass_schema(obj)
             # probably need to take care of other subclasses here
         elif isinstance(obj, typing.TypeVar):
             return self._unsubstituted_typevar_schema(obj)
 
+        # TODO: _std_types_schema iterates over the __mro__ looking for an expected schema.
+        #   This will catch subclasses of typing.Deque, preventing us from properly supporting user-defined
+        #   generic subclasses. (In principle this would also catch typing.OrderedDict, but that is currently
+        #   already getting caught in the `issubclass(obj, dict):` check above.
         std_schema = self._std_types_schema(obj)
         if std_schema is not None:
             return std_schema
@@ -244,17 +256,25 @@ class GenerateSchema:
             return self._union_schema(obj)
         elif issubclass(origin, Annotated):  # type: ignore[arg-type]
             return self._annotated_schema(obj)
-        elif issubclass(origin, (typing.List, typing.Set, typing.FrozenSet)):
-            return self._generic_collection_schema(obj)
+        elif issubclass(origin, typing.List):
+            return self._generic_collection_schema(list, obj, origin)
+        elif issubclass(origin, typing.Set):
+            return self._generic_collection_schema(set, obj, origin)
+        elif issubclass(origin, typing.FrozenSet):
+            return self._generic_collection_schema(frozenset, obj, origin)
         elif issubclass(origin, typing.Tuple):  # type: ignore[arg-type]
+            # TODO: To support generic subclasses of typing.Tuple, we need to better-introspect the args to origin
             return self._tuple_schema(obj)
         elif issubclass(origin, typing.Counter):
+            # Subclasses of typing.Counter may be handled as subclasses of dict; see note above
             return self._counter_schema(obj)
         elif origin == typing.Dict:
             return self._dict_schema(obj)
         elif issubclass(origin, typing.Dict):
+            # Subclasses of typing.Dict may be handled as subclasses of dict; see note above
             return self._dict_subclass_schema(obj)
         elif issubclass(origin, typing.Mapping):
+            # Because typing.Mapping does not have a specified `__init__` signature, we don't validate into subclasses
             return self._mapping_schema(obj)
         elif issubclass(origin, typing.Type):  # type: ignore[arg-type]
             return self._subclass_schema(obj)
@@ -263,14 +283,17 @@ class GenerateSchema:
 
             return deque_schema(self, obj)
         elif issubclass(origin, typing.OrderedDict):
+            # Subclasses of typing.OrderedDict may be handled as subclasses of dict; see note above
             from ._std_types_schema import ordered_dict_schema
 
             return ordered_dict_schema(self, obj)
         elif issubclass(origin, typing.Sequence):
+            # Because typing.Sequence does not have a specified `__init__` signature, we don't validate into subclasses
             return self._sequence_schema(obj)
         elif issubclass(origin, typing.MutableSet):
             raise PydanticSchemaGenerationError('Unable to generate pydantic-core schema MutableSet TODO.')
         elif issubclass(origin, (typing.Iterable, collections.abc.Iterable)):
+            # Because typing.Iterable does not have a specified `__init__` signature, we don't validate into subclasses
             return self._iterable_schema(obj)
         elif issubclass(origin, (re.Pattern, typing.Pattern)):
             return self._pattern_schema(obj)
@@ -415,9 +438,9 @@ class GenerateSchema:
                 'Please use `typing_extensions.TypedDict` instead of `typing.TypedDict` on Python < 3.11.'
             )
 
-        required_keys: typing.FrozenSet[str] = typed_dict_cls.__required_keys__
+        required_keys: frozenset[str] = typed_dict_cls.__required_keys__
 
-        fields: typing.Dict[str, core_schema.TypedDictField] = {}
+        fields: dict[str, core_schema.TypedDictField] = {}
         validator_functions = ValidationFunctions(())
         serializer_functions = SerializationFunctions(())
 
@@ -494,21 +517,31 @@ class GenerateSchema:
             parameter_schema['alias'] = field.alias
         return parameter_schema
 
-    def _generic_collection_schema(self, type_: Any) -> core_schema.CoreSchema:
+    def _generic_collection_schema(
+        self, parent_type: type[Any], type_: type[Any], origin: type[Any]
+    ) -> core_schema.CoreSchema:
         """
-        Generate schema for List, Set etc. - where the schema includes `items_schema`
+        Generate schema for List, Set, and FrozenSet, possibly parameterized.
 
-        e.g. `list[int]`.
+        :param parent_type: Either `list`, `set` or `frozenset` - the builtin type
+        :param type_: The type of the collection, e.g. `List[int]` or `List`, or a subclass of one of them
+        :param origin: The origin type
         """
-        try:
-            name = type_.__name__
-        except AttributeError:
-            name = get_origin(type_).__name__  # type: ignore[union-attr]
-
-        return {
-            'type': name.lower(),
+        schema: core_schema.CoreSchema = {  # type: ignore[misc,assignment]
+            'type': parent_type.__name__.lower(),
             'items_schema': self.generate_schema(get_first_arg(type_)),
         }
+
+        if origin == parent_type:
+            return schema
+        else:
+            # Ensure the validated value is converted back to the specific subclass type
+            # NOTE: we might have better performance by using a tuple or list validator for the schema here,
+            # but if you care about performance, you can define your own schema.
+            # We should optimize for compatibility, not performance in this case
+            return core_schema.general_after_validation_function(
+                lambda __input_value, __info: type_(__input_value), schema
+            )
 
     def _tuple_schema(self, tuple_type: Any) -> core_schema.CoreSchema:
         """
@@ -667,7 +700,7 @@ class GenerateSchema:
         from . import _serializers, _validators
 
         metadata = build_metadata_dict(js_metadata={'source_class': pattern_type, 'type': 'string', 'format': 'regex'})
-        ser = core_schema.function_plain_ser_schema(_serializers.pattern_serializer, json_return_type='str')
+        ser = core_schema.general_function_plain_ser_schema(_serializers.pattern_serializer, json_return_type='str')
         if pattern_type == typing.Pattern or pattern_type == re.Pattern:
             # bare type
             return core_schema.general_plain_validation_function(
@@ -716,7 +749,7 @@ class GenerateSchema:
         Generate schema for a dataclass.
         """
         # FIXME we need a way to make sure kw_only info is propagated through to fields
-        fields = collect_fields(
+        fields, _class_vars = collect_fields(
             dataclass, dataclass.__bases__, self.types_namespace, dc_kw_only=True, is_dataclass=True
         )
 
@@ -747,32 +780,81 @@ def apply_validators(schema: core_schema.CoreSchema, validators: list[Validator]
     """
     Apply validators to a schema.
     """
+    f_match: Mapping[
+        tuple[str, bool], Callable[[Callable[..., Any], core_schema.CoreSchema], core_schema.CoreSchema]
+    ] = {
+        ('before', True): core_schema.field_before_validation_function,
+        ('after', True): core_schema.field_after_validation_function,
+        ('plain', True): lambda f, _: core_schema.field_plain_validation_function(f),
+        ('wrap', True): core_schema.field_wrap_validation_function,
+        ('before', False): core_schema.general_before_validation_function,
+        ('after', False): core_schema.general_after_validation_function,
+        ('plain', False): lambda f, _: core_schema.general_plain_validation_function(f),
+        ('wrap', False): core_schema.general_wrap_validation_function,
+    }
     for validator in validators:
         assert validator.sub_path is None, 'validator.sub_path is not yet supported'
-        function = typing.cast(typing.Callable[..., Any], validator.function)
-        if validator.mode == 'plain':
-            schema = core_schema.general_plain_validation_function(function)
-        elif validator.mode == 'wrap':
-            schema = core_schema.general_wrap_validation_function(function, schema)
-        else:
-            func: core_schema.FieldValidatorFunctionSchema | core_schema.GeneralValidatorFunctionSchema
-            if validator.is_field_validator:
-                func = core_schema.FieldValidatorFunctionSchema(
-                    type='field',
-                    function=function,
-                )
-            else:
-                func = core_schema.GeneralValidatorFunctionSchema(
-                    type='general',
-                    function=function,
-                )
-            schema = core_schema.FunctionSchema(
-                type='function',
-                mode=validator.mode,
-                function=func,
-                schema=schema,
-            )
+        assert validator.function is not None
+        schema = f_match[(validator.mode, validator.is_field_validator)](validator.function, schema)
     return schema
+
+
+_SerializerType = Literal[
+    'field-wrap',
+    'general-wrap',
+    'field-plain',
+    'general-plain',
+]
+
+
+_VALID_SERIALIZER_SIGNATURES = """\
+Valid serializer signatures are:
+
+# an instance method with the default mode or `mode='plain'`
+@serializer('x')  # or @serialize('x', mode='plain')
+def ser_x(self, value: Any, info: pydantic.FieldSerializationInfo): ...
+
+# a static method or free-standing function with the default mode or `mode='plain'`
+@serializer('x')  # or @serialize('x', mode='plain')
+@staticmethod
+def ser_x(value: Any, info: pydantic.SerializationInfo): ...
+# equivalent to
+def ser_x(value: Any, info: pydantic.SerializationInfo): ...
+serializer('x')(ser_x)
+
+# an instance method with `mode='wrap'`
+@serializer('x', mode='wrap')
+def ser_x(self, value: Any, nxt: pydantic.SerializeWrapHandler, info: pydantic.FieldSerializationInfo): ...
+
+# a static method or free-standing function with `mode='wrap'`
+@serializer('x', mode='wrap')
+@staticmethod
+def ser_x(value: Any, nxt: pydantic.SerializeWrapHandler, info: pydantic.SerializationInfo): ...
+# equivalent to
+def ser_x(value: Any, nxt: pydantic.SerializeWrapHandler, info: pydantic.SerializationInfo): ...
+serializer('x')(ser_x)
+"""
+
+
+def _is_unbound_instance_method(sig: Signature, func: Callable[..., Any]) -> bool:
+    if len(sig.parameters) < 2:
+        raise TypeError(f'Unrecognized serializer signature for {func.__name__}: {sig}\n{_VALID_SERIALIZER_SIGNATURES}')
+    return next(iter(sig.parameters.values())).name == 'self'
+
+
+def _infer_serializer_type_from_signature(sig: Signature, func: Callable[..., Any]) -> _SerializerType:
+    if len(sig.parameters) == 2:
+        # (value, info) -> Any
+        return 'general-plain'
+    elif len(sig.parameters) == 3:
+        # (self, value, info) -> Any or (value, nxt, info)
+        if _is_unbound_instance_method(sig, func):
+            return 'field-plain'
+        return 'general-wrap'
+    elif len(sig.parameters) == 4 and _is_unbound_instance_method(sig, func):
+        # (self, value, nxt, info) -> Any
+        return 'field-wrap'
+    raise TypeError(f'Unrecognized serializer signature for {func.__name__}: {sig}\n{_VALID_SERIALIZER_SIGNATURES}')
 
 
 def apply_serializers(schema: core_schema.CoreSchema, serializers: list[Serializer]) -> core_schema.CoreSchema:
@@ -780,16 +862,35 @@ def apply_serializers(schema: core_schema.CoreSchema, serializers: list[Serializ
     Apply serializers to a schema.
     """
     if serializers:
-        # user the last serializser to make it easy to override a serializer set on a parent model
+        # use the last serializer to make it easy to override a serializer set on a parent model
         serializer = serializers[-1]
         assert serializer.sub_path is None, 'serializer.sub_path is not yet supported'
         function = typing.cast(typing.Callable[..., Any], serializer.function)
-        if serializer.wrap:
-            schema['serialization'] = core_schema.function_wrap_ser_schema(
+        sig = signature(function)
+        type_ = _infer_serializer_type_from_signature(sig, function)
+        if serializer.wrap and type_ not in ('general-wrap', 'field-wrap'):
+            raise TypeError(
+                f'Invalid signature for wrap serializer {function.__name__}: {sig}\n{_VALID_SERIALIZER_SIGNATURES}'
+            )
+        elif not serializer.wrap and type_ not in ('general-plain', 'field-plain'):
+            raise TypeError(
+                f'Invalid signature for plain serializer {function.__name__}: {sig}\n{_VALID_SERIALIZER_SIGNATURES}'
+            )
+        if type_ == 'general-wrap':
+            schema['serialization'] = core_schema.general_function_wrap_ser_schema(
                 function, schema.copy(), json_return_type=serializer.json_return_type, when_used=serializer.when_used
             )
+        elif type_ == 'field-wrap':
+            schema['serialization'] = core_schema.field_function_wrap_ser_schema(
+                function, schema.copy(), json_return_type=serializer.json_return_type, when_used=serializer.when_used
+            )
+        elif type_ == 'general-plain':
+            schema['serialization'] = core_schema.general_function_plain_ser_schema(
+                function, json_return_type=serializer.json_return_type, when_used=serializer.when_used
+            )
         else:
-            schema['serialization'] = core_schema.function_plain_ser_schema(
+            assert type_ == 'field-plain'
+            schema['serialization'] = core_schema.field_function_plain_ser_schema(
                 function, json_return_type=serializer.json_return_type, when_used=serializer.when_used
             )
     return schema
@@ -834,7 +935,7 @@ def apply_single_annotation(schema: core_schema.CoreSchema, metadata: Any) -> co
     if isinstance(metadata, PydanticGeneralMetadata):
         metadata_dict = metadata.__dict__
     elif isinstance(metadata, (BaseMetadata, PydanticMetadata)):
-        metadata_dict = dataclasses.asdict(metadata)
+        metadata_dict = dataclasses.asdict(metadata)  # type: ignore[call-overload]
     elif isinstance(metadata, type) and issubclass(metadata, PydanticMetadata):
         # also support PydanticMetadata classes being used without initialisation,
         # e.g. `Annotated[int, Strict]` as well as `Annotated[int, Strict()]`

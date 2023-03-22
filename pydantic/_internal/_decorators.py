@@ -7,7 +7,7 @@ import inspect
 import warnings
 from functools import wraps
 from inspect import Parameter, signature
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, List, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar, Union, cast
 
 from pydantic_core.core_schema import GeneralValidatorFunction, JsonReturnTypes, ValidationInfo, WhenUsed
 from typing_extensions import Protocol
@@ -73,7 +73,7 @@ class Serializer:
         sub_path: tuple[str | int, ...] | None = None,
         check_fields: bool | None = None,
     ):
-        # arguments match core_schema.function_plain_ser_schema or core_schema.function_wrap_ser_schema
+        # arguments match core_schema.general_function_plain_ser_schema or core_schema.general_function_wrap_ser_schema
         # function is set later after the class is created and functions are bound
         self.function: Callable[..., Any] | None = None
         self.sub_path = sub_path
@@ -203,19 +203,22 @@ class SerializationFunctions(DecoratorFunctions[Serializer]):
 _FUNCS: set[str] = set()
 
 
-def prepare_serializer_decorator(function: Callable[..., Any], allow_reuse: bool) -> classmethod[Any]:
+_SerializerType = TypeVar('_SerializerType', bound=Callable[..., Any])
+
+
+def prepare_serializer_decorator(function: _SerializerType, allow_reuse: bool) -> _SerializerType:
     """
-    Convert the function to a classmethod if it isn't already.
     Warn about validators/serializers with duplicated names since without this, they can be overwritten silently
     which generally isn't the intended behaviour, don't run in ipython (see #312) or if `allow_reuse` is True.
     """
-    f_cls = function if isinstance(function, classmethod) else classmethod(function)
+    if isinstance(function, staticmethod):
+        function = function.__func__  # type: ignore[assignment]
     if not allow_reuse and not in_ipython():
-        ref = f'{f_cls.__func__.__module__}::{f_cls.__func__.__qualname__}'
+        ref = f'{function.__module__}::{function.__qualname__}'
         if ref in _FUNCS:
             warnings.warn(f'duplicate validator function "{ref}"; if this is intended, set `allow_reuse=True`')
         _FUNCS.add(ref)
-    return f_cls
+    return function
 
 
 def prepare_validator_decorator(function: Callable[..., Any], allow_reuse: bool) -> Any:
@@ -322,8 +325,8 @@ def make_generic_validator(
             stacklevel=6,
         )
 
-    positional_params: List[str] = []
-    keyword_only_params: List[str] = []
+    positional_params: list[str] = []
+    keyword_only_params: list[str] = []
     accepts_kwargs = False
     for param_name, parameter in sig.parameters.items():
         if param_name in ('field', 'config'):

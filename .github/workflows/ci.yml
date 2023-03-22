@@ -43,6 +43,11 @@ jobs:
         with:
           extra_args: --all-files --verbose
 
+      - name: run mypy
+        # pre-commit runs make typecheck-fast
+        # this is the more exhaustive version
+        run: make typecheck
+
       - name: make history
         run: python3 ./changes/make_history.py
 
@@ -53,7 +58,7 @@ jobs:
 
       - run: npm install -g pyright
 
-      - run: make pyright
+      - run: make test-pyright
 
   docs-build:
     runs-on: ubuntu-latest
