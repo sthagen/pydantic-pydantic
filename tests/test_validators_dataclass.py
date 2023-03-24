@@ -1,10 +1,13 @@
+import re
 from dataclasses import asdict, is_dataclass
-from typing import List
+from typing import Any, List
 
 import pytest
+from dirty_equals import HasRepr, IsStr
 
-from pydantic import ValidationError, root_validator, validator
+from pydantic import ValidationError, root_validator
 from pydantic.dataclasses import dataclass
+from pydantic.decorators import field_validator
 
 
 def test_simple():
@@ -12,43 +15,45 @@ def test_simple():
     class MyDataclass:
         a: str
 
-        @validator('a')
+        @field_validator('a')
+        @classmethod
         def change_a(cls, v):
             return v + ' changed'
 
     assert MyDataclass(a='this is foobar good').a == 'this is foobar good changed'
 
 
-def test_validate_pre():
+def test_validate_before():
     @dataclass
     class MyDataclass:
         a: List[int]
 
-        @validator('a', mode='before')
-        def check_a1(cls, v):
+        @field_validator('a', mode='before')
+        @classmethod
+        def check_a1(cls, v: List[Any]) -> List[Any]:
             v.append('123')
             return v
 
-        @validator('a')
-        def check_a2(cls, v):
+        @field_validator('a')
+        @classmethod
+        def check_a2(cls, v: List[int]) -> List[int]:
             v.append(456)
             return v
 
     assert MyDataclass(a=[1, 2]).a == [1, 2, 123, 456]
 
 
-@pytest.mark.xfail(reason='working on V2')
 def test_validate_multiple():
-    # also test TypeError
     @dataclass
     class MyDataclass:
         a: str
         b: str
 
-        @validator('a', 'b')
+        @field_validator('a', 'b')
+        @classmethod
         def check_a_and_b(cls, v, info):
             if len(v) < 4:
-                raise TypeError(f'{info.field_name} is too short')
+                raise ValueError(f'{info.field_name} is too short')
             return v + 'x'
 
     assert asdict(MyDataclass(a='1234', b='5678')) == {'a': '1234x', 'b': '5678x'}
@@ -56,18 +61,49 @@ def test_validate_multiple():
     with pytest.raises(ValidationError) as exc_info:
         MyDataclass(a='x', b='x')
     assert exc_info.value.errors() == [
-        {'loc': ('a',), 'msg': 'a is too short', 'type': 'type_error'},
-        {'loc': ('b',), 'msg': 'b is too short', 'type': 'type_error'},
+        {
+            'ctx': {'error': 'a is too short'},
+            'input': 'x',
+            'loc': ('a',),
+            'msg': 'Value error, a is too short',
+            'type': 'value_error',
+        },
+        {
+            'ctx': {'error': 'b is too short'},
+            'input': 'x',
+            'loc': ('b',),
+            'msg': 'Value error, b is too short',
+            'type': 'value_error',
+        },
     ]
 
 
-# @pytest.mark.xfail(reason='working on V2')
+def test_type_error():
+    @dataclass
+    class MyDataclass:
+        a: str
+        b: str
+
+        @field_validator('a', 'b')
+        @classmethod
+        def check_a_and_b(cls, v, info):
+            if len(v) < 4:
+                raise TypeError(f'{info.field_name} is too short')
+            return v + 'x'
+
+    assert asdict(MyDataclass(a='1234', b='5678')) == {'a': '1234x', 'b': '5678x'}
+
+    with pytest.raises(TypeError, match='a is too short'):
+        MyDataclass(a='x', b='x')
+
+
 def test_classmethod():
     @dataclass
     class MyDataclass:
         a: str
 
-        @validator('a')
+        @field_validator('a')
+        @classmethod
         def check_a(cls, v):
             assert cls is MyDataclass and is_dataclass(MyDataclass)
             return v
@@ -82,7 +118,8 @@ def test_validate_parent():
     class Parent:
         a: str
 
-        @validator('a')
+        @field_validator('a')
+        @classmethod
         def change_a(cls, v):
             return v + ' changed'
 
@@ -94,26 +131,26 @@ def test_validate_parent():
     assert Child(a='this is foobar good').a == 'this is foobar good changed'
 
 
-@pytest.mark.xfail(reason='duplicate validators should override')
 def test_inheritance_replace():
     @dataclass
     class Parent:
         a: int
 
-        @validator('a')
-        def add_to_a(cls, v, **kwargs):
+        @field_validator('a')
+        @classmethod
+        def add_to_a(cls, v):
             return v + 1
 
     @dataclass
     class Child(Parent):
-        @validator('a')
-        def add_to_a(cls, v, **kwargs):
+        @field_validator('a')
+        @classmethod
+        def add_to_a(cls, v):
             return v + 5
 
     assert Child(a=0).a == 5
 
 
-@pytest.mark.xfail(reason='working on V2')
 def test_root_validator():
     root_val_values = []
 
@@ -122,12 +159,13 @@ def test_root_validator():
         a: int
         b: str
 
-        @validator('b')
-        def repeat_b(cls, v, **kwargs):
+        @field_validator('b')
+        @classmethod
+        def repeat_b(cls, v):
             return v * 2
 
-        @root_validator
-        def root_validator(cls, values, **kwargs):
+        @root_validator(skip_on_failure=True)
+        def root_validator(cls, values):
             root_val_values.append(values)
             if 'snap' in values.get('b', ''):
                 raise ValueError('foobar')
@@ -136,7 +174,15 @@ def test_root_validator():
     assert asdict(MyDataclass(a='123', b='bar')) == {'a': 123, 'b': 'changed'}
 
     with pytest.raises(ValidationError) as exc_info:
-        MyDataclass(a=1, b='snap dragon')
+        MyDataclass(1, b='snap dragon')
     assert root_val_values == [{'a': 123, 'b': 'barbar'}, {'a': 1, 'b': 'snap dragonsnap dragon'}]
 
-    assert exc_info.value.errors() == [{'loc': ('__root__',), 'msg': 'foobar', 'type': 'value_error'}]
+    assert exc_info.value.errors() == [
+        {
+            'ctx': {'error': 'foobar'},
+            'input': HasRepr(IsStr(regex=re.escape("ArgsKwargs(args=(1,), kwargs={'b': 'snap dragon'})"))),
+            'loc': (),
+            'msg': 'Value error, foobar',
+            'type': 'value_error',
+        }
+    ]

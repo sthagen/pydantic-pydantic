@@ -7,7 +7,7 @@ import sys
 import typing
 import warnings
 from abc import ABCMeta
-from copy import deepcopy
+from copy import copy, deepcopy
 from enum import Enum
 from functools import partial
 from inspect import getdoc
@@ -83,9 +83,9 @@ class ModelMetaclass(ABCMeta):
                     # in a single function
                     namespace['_init_private_attributes'] = _model_construction.init_private_attributes
 
-                    def __pydantic_post_init__(self_: Any, **kwargs: Any) -> None:
-                        self_._init_private_attributes()
-                        self_.model_post_init(**kwargs)
+                    def __pydantic_post_init__(self_: Any, context: Any) -> None:
+                        self_._init_private_attributes(context)
+                        self_.model_post_init(context)
 
                     namespace['__pydantic_post_init__'] = __pydantic_post_init__
                 else:
@@ -100,17 +100,6 @@ class ModelMetaclass(ABCMeta):
                     class_vars.update(base.__class_vars__)
             namespace['__class_vars__'] = class_vars
             namespace['__private_attributes__'] = {**base_private_attributes, **private_attributes}
-
-            namespace['__pydantic_validator_functions__'] = validator_functions = _decorators.ValidationFunctions(bases)
-
-            namespace['__pydantic_serializer_functions__'] = serializer_functions = _decorators.SerializationFunctions(
-                bases
-            )
-
-            for name, value in namespace.items():
-                found_validator = validator_functions.extract_decorator(name, value)
-                if not found_validator:
-                    serializer_functions.extract_decorator(name, value)
 
             if config_new['json_encoders']:
                 json_encoder = partial(custom_pydantic_encoder, config_new['json_encoders'])
@@ -128,6 +117,8 @@ class ModelMetaclass(ABCMeta):
 
             cls: type[BaseModel] = super().__new__(mcs, cls_name, bases, namespace, **kwargs)  # type: ignore
 
+            cls.__pydantic_decorators__ = _decorators.gather_decorator_functions(cls)
+
             cls.__pydantic_generic_args__ = __pydantic_generic_args__
             cls.__pydantic_generic_origin__ = __pydantic_generic_origin__
             cls.__pydantic_generic_parameters__ = __pydantic_generic_parameters__ or getattr(
@@ -141,6 +132,8 @@ class ModelMetaclass(ABCMeta):
                     zip(_generics.iter_contained_typevars(__pydantic_generic_origin__), __pydantic_generic_args__ or ())
                 )
             )
+
+            cls.__pydantic_model_complete__ = False  # Ensure this specific class gets completed
             _model_construction.complete_model_class(
                 cls,
                 cls_name,
@@ -168,8 +161,8 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         __pydantic_validator__: typing.ClassVar[SchemaValidator]
         __pydantic_core_schema__: typing.ClassVar[CoreSchema]
         __pydantic_serializer__: typing.ClassVar[SchemaSerializer]
-        __pydantic_validator_functions__: typing.ClassVar[_decorators.ValidationFunctions]
-        __pydantic_serializer_functions__: typing.ClassVar[_decorators.SerializationFunctions]
+        __pydantic_decorators__: typing.ClassVar[_decorators.DecoratorInfos]
+        """metadata for `@validator`, `@root_validator` and `@serializer` decorators"""
         model_fields: typing.ClassVar[dict[str, FieldInfo]] = {}
         __json_encoder__: typing.ClassVar[typing.Callable[[Any], Any]] = lambda x: x  # noqa: E731
         __schema_cache__: typing.ClassVar[dict[Any, Any]] = {}
@@ -199,53 +192,41 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         Raises ValidationError if the input data cannot be parsed to form a valid model.
 
         Uses something other than `self` for the first arg to allow "self" as a field name.
-
-        `__tracebackhide__` tells pytest and some other tools to omit the function from tracebacks
         """
+        # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
         __tracebackhide__ = True
-        values, fields_set = __pydantic_self__.__pydantic_validator__.validate_python(data)
-        _object_setattr(__pydantic_self__, '__dict__', values)
-        _object_setattr(__pydantic_self__, '__fields_set__', fields_set)
-        if hasattr(__pydantic_self__, '__pydantic_post_init__'):
-            __pydantic_self__.__pydantic_post_init__(context=None)
+        __pydantic_self__.__pydantic_validator__.validate_python(data, self_instance=__pydantic_self__)
 
     @classmethod
     def model_validate(cls: type[Model], obj: Any) -> Model:
-        values, fields_set = cls.__pydantic_validator__.validate_python(obj)
-        m = cls.__new__(cls)
-        _object_setattr(m, '__dict__', values)
-        _object_setattr(m, '__fields_set__', fields_set)
-        if hasattr(cls, '__pydantic_post_init__'):
-            cls.__pydantic_post_init__(context=None)  # type: ignore[attr-defined]
-        return m
+        # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
+        __tracebackhide__ = True
+        return cls.__pydantic_validator__.validate_python(obj)
 
     @classmethod
     def model_validate_json(cls: type[Model], json_data: str | bytes | bytearray) -> Model:
-        values, fields_set = cls.__pydantic_validator__.validate_json(json_data)
-        m = cls.__new__(cls)
-        _object_setattr(m, '__dict__', values)
-        _object_setattr(m, '__fields_set__', fields_set)
-        if hasattr(cls, '__pydantic_post_init__'):
-            cls.__pydantic_post_init__(context=None)  # type: ignore[attr-defined]
-        return m
+        # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
+        __tracebackhide__ = True
+        return cls.__pydantic_validator__.validate_json(json_data)
 
     if typing.TYPE_CHECKING:
         # model_after_init is called after at the end of `__init__` if it's defined
-        def model_post_init(self, **kwargs: Any) -> None:
+        def model_post_init(self, _context: Any) -> None:
             pass
 
     @typing.no_type_check
     def __setattr__(self, name, value):
         if name in self.__class_vars__:
-            raise ValueError(f'"{self.__class__.__name__}" object has no field "{name}"')
+            raise AttributeError(
+                f'"{name}" is a ClassVar of `{self.__class__.__name__}` and cannot be set on an instance. '
+                f'If you want to set a value on the class, use `{self.__class__.__name__}.{name} = value`.'
+            )
         if name.startswith('_'):
             _object_setattr(self, name, value)
         elif self.model_config['frozen']:
             raise TypeError(f'"{self.__class__.__name__}" is frozen and does not support item assignment')
         elif self.model_config['validate_assignment']:
-            values, fields_set = self.__pydantic_validator__.validate_assignment(name, value, self.__dict__)
-            _object_setattr(self, '__dict__', values)
-            self.__fields_set__ |= fields_set
+            self.__pydantic_validator__.validate_assignment(self, name, value)
         elif self.model_config['extra'] is not Extra.allow and name not in self.model_fields:
             # TODO - matching error
             raise ValueError(f'"{self.__class__.__name__}" object has no field "{name}"')
@@ -373,6 +354,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
 
         return m
 
+    # @typing_extensions.deprecated('This method is now deprecated; use `model_copy` instead')
     def copy(
         self: Model,
         *,
@@ -382,6 +364,12 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         deep: bool = False,
     ) -> Model:
         """
+        This method is now deprecated; use `model_copy` instead. If you need include / exclude, use:
+
+            data = self.model_dump(include=include, exclude=exclude, round_trip=True)
+            data = {**data, **(update or {})}
+            copied = self.model_validate(data)
+
         Duplicate a model, optionally choose which fields to include, exclude and change.
 
         :param include: fields to include in new model
@@ -391,6 +379,11 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         :param deep: set to `True` to make a deep copy of the model
         :return: new model instance
         """
+        warnings.warn(
+            'The `copy` method is deprecated; use `model_copy` instead. '
+            'See the docstring of `BaseModel.copy` for details about how to handle include / exclude / update.',
+            DeprecationWarning,
+        )
 
         values = dict(
             self._iter(to_dict=False, by_alias=False, include=include, exclude=exclude, exclude_unset=False),
@@ -459,6 +452,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         )
 
     @classmethod
+    # @typing_extensions.deprecated('This method is only used for _iter, which is deprecated')
     @typing.no_type_check
     def _get_value(
         cls,
@@ -565,6 +559,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         """
         yield from self.__dict__.items()
 
+    # @typing_extensions.deprecated('This private method is only used for `BaseModel.copy`, which is deprecated')
     def _iter(
         self,
         to_dict: bool = False,
@@ -577,11 +572,15 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
     ) -> TupleGenerator:
         # Merge field set excludes with explicit exclude parameter with explicit overriding field set options.
         # The extra "is not None" guards are not logically necessary but optimizes performance for the simple case.
-        # if exclude is not None or self.__exclude_fields__ is not None:
-        #     exclude = _utils.ValueItems.merge(self.__exclude_fields__, exclude)
-        #
-        # if include is not None or self.__include_fields__ is not None:
-        #     include = _utils.ValueItems.merge(self.__include_fields__, include, intersect=True)
+        if exclude is not None:
+            exclude = _utils.ValueItems.merge(
+                {k: v.exclude for k, v in self.model_fields.items() if v.exclude is not None}, exclude
+            )
+
+        if include is not None:
+            include = _utils.ValueItems.merge(
+                {k: v.include for k, v in self.model_fields.items()}, include, intersect=True
+            )
 
         allowed_keys = self._calculate_keys(
             include=include, exclude=exclude, exclude_unset=exclude_unset  # type: ignore
@@ -657,6 +656,51 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             return self.model_dump() == other.model_dump()
         else:
             return self.model_dump() == other
+
+    def model_copy(self: Model, *, update: dict[str, Any] | None = None, deep: bool = False) -> Model:
+        """
+        Returns a copy of the model.
+
+        :param update: values to change/add in the new model. Note: the data is not validated before creating
+            the new model: you should trust this data
+        :param deep: set to `True` to make a deep copy of the model
+        :return: new model instance
+        """
+        copied = self.__deepcopy__() if deep else self.__copy__()
+        if update:
+            copied.__dict__.update(update)
+            copied.__fields_set__.update(update.keys())
+        return copied
+
+    def __copy__(self: Model) -> Model:
+        """
+        Returns a shallow copy of the model
+        """
+        cls = type(self)
+        m = cls.__new__(cls)
+        _object_setattr(m, '__dict__', copy(self.__dict__))
+        _object_setattr(m, '__fields_set__', copy(self.__fields_set__))
+        for name in self.__private_attributes__:
+            value = getattr(self, name, Undefined)
+            if value is not Undefined:
+                _object_setattr(m, name, value)
+        return m
+
+    def __deepcopy__(self: Model, memo: dict[int, Any] | None = None) -> Model:
+        """
+        Returns a deep copy of the model
+        """
+        cls = type(self)
+        m = cls.__new__(cls)
+        _object_setattr(m, '__dict__', deepcopy(self.__dict__, memo=memo))
+        # This next line doesn't need a deepcopy because __fields_set__ is a set[str],
+        # and attempting a deepcopy would be marginally slower.
+        _object_setattr(m, '__fields_set__', copy(self.__fields_set__))
+        for name in self.__private_attributes__:
+            value = getattr(self, name, Undefined)
+            if value is not Undefined:
+                _object_setattr(m, name, deepcopy(value, memo=memo))
+        return m
 
     def __repr_args__(self) -> _repr.ReprArgs:
         return [

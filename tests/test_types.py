@@ -74,8 +74,8 @@ from pydantic import (
     conlist,
     conset,
     constr,
-    validator,
 )
+from pydantic.decorators import field_validator
 from pydantic.types import ImportString, SecretField, Strict
 
 try:
@@ -1134,6 +1134,45 @@ def test_int_enum_type():
             my_int_enum: IntEnum
 
 
+@pytest.mark.parametrize(
+    'kwargs,type_',
+    [
+        ({'max_length': 5}, int),
+        ({'min_length': 2}, float),
+        ({'frozen': True}, bool),
+        ({'pattern': '^foo$'}, int),
+        ({'gt': 2}, str),
+        ({'lt': 5}, bytes),
+        ({'ge': 2}, str),
+        ({'le': 5}, bool),
+        ({'gt': 0}, Callable),
+        ({'gt': 0}, Callable[[int], int]),
+        ({'gt': 0}, conlist(int, min_length=4)),
+        ({'gt': 0}, conset(int, min_length=4)),
+        ({'gt': 0}, confrozenset(int, min_length=4)),
+    ],
+)
+def test_invalid_schema_constraints(kwargs, type_):
+    with pytest.raises(SchemaError, match='Invalid Schema:\n.*\n  Extra inputs are not permitted'):
+
+        class Foo(BaseModel):
+            a: type_ = Field('foo', title='A title', description='A description', **kwargs)
+
+
+@pytest.mark.xfail(reason='Do we want to make this a SchemaError?')
+def test_invalid_decimal_constraint():
+    # Using the following line instead of the uncommented one below would make the test pass:
+    # with pytest.raises(TypeError, match="DecimalValidator has no attribute 'max_length'"):
+    with pytest.raises(SchemaError, match='Invalid Schema:\n.*\n  Extra inputs are not permitted'):
+        # TODO: This error comes from pydantic._internal._fields.CustomValidator._update_attrs
+        #   Should we modify how that works to produce SchemaError like in the cases above?
+        #   If so, do we need to expose a way to create a SchemaError from python?
+        #   Right now this can only be done from the Rust side of pydantic_core
+
+        class Foo(BaseModel):
+            a: Decimal = Field('foo', title='A title', description='A description', max_length=5)
+
+
 @pytest.mark.skipif(not email_validator, reason='email_validator not installed')
 def test_string_success():
     class MoreStringsModel(BaseModel):
@@ -1554,7 +1593,8 @@ def test_infinite_iterable_validate_first():
         it: Iterable[int]
         b: int
 
-        @validator('it')
+        @field_validator('it')
+        @classmethod
         def infinite_first_int(cls, it):
             return itertools.chain([next(it)], it)
 
@@ -2836,13 +2876,14 @@ def test_json_not_str():
     ]
 
 
-def test_json_pre_validator():
+def test_json_before_validator():
     call_count = 0
 
     class JsonModel(BaseModel):
-        json_obj: Json
+        json_obj: Json[str]
 
-        @validator('json_obj', mode='before')
+        @field_validator('json_obj', mode='before')
+        @classmethod
         def check(cls, v):
             assert v == '"foobar"'
             nonlocal call_count
@@ -3059,8 +3100,10 @@ def test_secretbytes():
     assert f.empty_password.get_secret_value() == b''
 
     # Assert that SecretBytes is equal to SecretBytes if the secret is the same.
-    assert f == f.copy()
-    assert f != f.copy(update=dict(password=b'4321'))
+    assert f == f.model_copy()
+    copied_with_changes = f.model_copy()
+    copied_with_changes.password = SecretBytes(b'4321')
+    assert f != copied_with_changes
 
 
 def test_secretbytes_is_secret_field():
@@ -3558,7 +3601,7 @@ def test_union_compound_types():
     assert e.value.errors() == [
         {
             'type': 'string_type',
-            'loc': ('values', 'function-wrap[mapping_validator(), dict[str,str]]', 'x'),
+            'loc': ('values', 'dict[str,str]', 'x'),
             'msg': 'Input should be a valid string',
             'input': {'a': 'b'},
         },
@@ -3570,7 +3613,7 @@ def test_union_compound_types():
         },
         {
             'type': 'list_type',
-            'loc': ('values', 'function-wrap[mapping_validator(), dict[str,list[str]]]', 'x'),
+            'loc': ('values', 'dict[str,list[str]]', 'x'),
             'msg': 'Input should be a valid list/array',
             'input': {'a': 'b'},
         },

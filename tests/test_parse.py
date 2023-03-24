@@ -23,20 +23,24 @@ def test_model_validate_fails():
     ]
 
 
-@pytest.mark.xfail(reason='working on V2')
 def test_model_validate_submodel():
     m = Model.model_validate(Model(a=10.2))
     assert m.model_dump() == {'a': 10.2, 'b': 10}
 
 
-@pytest.mark.xfail(reason='working on V2')
 def test_model_validate_wrong_model():
     class Foo(BaseModel):
-        c = 123
+        c: int = 123
 
     with pytest.raises(ValidationError) as exc_info:
         Model.model_validate(Foo())
-    assert exc_info.value.errors() == [{'loc': ('a',), 'msg': 'field required', 'type': 'value_error.missing'}]
+    assert exc_info.value.errors() == [
+        {'input': Foo(), 'loc': (), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model.model_validate(Foo().model_dump())
+    assert exc_info.value.errors() == [{'input': {'c': 123}, 'loc': ('a',), 'msg': 'Field required', 'type': 'missing'}]
 
 
 @pytest.mark.xfail(reason='working on V2')
