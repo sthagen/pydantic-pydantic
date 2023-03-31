@@ -1,4 +1,5 @@
 import platform
+import re
 import sys
 from collections import defaultdict
 from copy import deepcopy
@@ -24,7 +25,17 @@ from uuid import UUID, uuid4
 import pytest
 from typing_extensions import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Extra, Field, PrivateAttr, SecretStr, ValidationError, constr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Extra,
+    Field,
+    PrivateAttr,
+    PydanticUserError,
+    SecretStr,
+    ValidationError,
+    constr,
+)
 
 
 def test_success():
@@ -38,12 +49,16 @@ def test_success():
     assert m.b == 10
 
 
-class UltraSimpleModel(BaseModel):
-    a: float
-    b: int = 10
+@pytest.fixture(name='UltraSimpleModel', scope='session')
+def ultra_simple_model_fixture():
+    class UltraSimpleModel(BaseModel):
+        a: float
+        b: int = 10
+
+    return UltraSimpleModel
 
 
-def test_ultra_simple_missing():
+def test_ultra_simple_missing(UltraSimpleModel):
     with pytest.raises(ValidationError) as exc_info:
         UltraSimpleModel()
     assert exc_info.value.errors() == [{'loc': ('a',), 'msg': 'Field required', 'type': 'missing', 'input': {}}]
@@ -54,7 +69,7 @@ def test_ultra_simple_missing():
     )
 
 
-def test_ultra_simple_failed():
+def test_ultra_simple_failed(UltraSimpleModel):
     with pytest.raises(ValidationError) as exc_info:
         UltraSimpleModel(a='x', b='x')
     assert exc_info.value.errors() == [
@@ -73,7 +88,7 @@ def test_ultra_simple_failed():
     ]
 
 
-def test_ultra_simple_repr():
+def test_ultra_simple_repr(UltraSimpleModel):
     m = UltraSimpleModel(a=10.2)
     assert str(m) == 'a=10.2 b=10'
     assert repr(m) == 'UltraSimpleModel(a=10.2, b=10)'
@@ -81,7 +96,7 @@ def test_ultra_simple_repr():
     assert repr(m.model_fields['b']) == 'FieldInfo(annotation=int, required=False, default=10)'
     assert dict(m) == {'a': 10.2, 'b': 10}
     assert m.model_dump() == {'a': 10.2, 'b': 10}
-    assert m.model_dump_json() == b'{"a":10.2,"b":10}'
+    assert m.model_dump_json() == '{"a":10.2,"b":10}'
     assert str(m) == 'a=10.2 b=10'
 
 
@@ -96,10 +111,10 @@ def test_default_factory_field():
     assert str(m) == 'a=1'
     assert repr(m.model_fields['a']) == 'FieldInfo(annotation=int, required=False, default_factory=myfunc)'
     assert dict(m) == {'a': 1}
-    assert m.model_dump_json() == b'{"a":1}'
+    assert m.model_dump_json() == '{"a":1}'
 
 
-def test_comparing():
+def test_comparing(UltraSimpleModel):
     m = UltraSimpleModel(a=10.2, b='100')
     assert m.model_dump() == {'a': 10.2, 'b': 100}
     assert m != {'a': 10.2, 'b': 100}
@@ -155,6 +170,10 @@ def test_nullable_strings_fails(NoneCheckModel):
 
 @pytest.fixture(name='ParentModel', scope='session')
 def parent_sub_model_fixture():
+    class UltraSimpleModel(BaseModel):
+        a: float
+        b: int = 10
+
     class ParentModel(BaseModel):
         grape: bool
         banana: UltraSimpleModel
@@ -287,7 +306,7 @@ def test_extra_ignored():
         model.c = 1
 
 
-def test_set_attr():
+def test_set_attr(UltraSimpleModel):
     m = UltraSimpleModel(a=10.2)
     assert m.model_dump() == {'a': 10.2, 'b': 10}
 
@@ -698,12 +717,12 @@ def test_annotation_field_name_shadows_attribute():
 
 
 def test_value_field_name_shadows_attribute():
-    class BadModel(BaseModel):
-        model_json_schema = (
-            'abc'  # This conflicts with the BaseModel's model_json_schema() class method, but has no annotation
-        )
+    with pytest.raises(PydanticUserError, match="A non-annotated attribute was detected: `model_json_schema = 'abc'`"):
 
-    assert len(BadModel.model_fields) == 0
+        class BadModel(BaseModel):
+            model_json_schema = (
+                'abc'  # This conflicts with the BaseModel's model_json_schema() class method, but has no annotation
+            )
 
 
 def test_class_var():
@@ -840,7 +859,7 @@ def test_dict_with_extra_keys():
     assert m.model_dump(by_alias=True) == {'alias_a': None, 'extra_key': 'extra'}
 
 
-def test_untouched_types():
+def test_ignored_types():
     from pydantic import BaseModel
 
     class _ClassPropertyDescriptor:
@@ -853,7 +872,7 @@ def test_untouched_types():
     classproperty = _ClassPropertyDescriptor
 
     class Model(BaseModel):
-        model_config = ConfigDict(keep_untouched=(classproperty,))
+        model_config = ConfigDict(ignored_types=(classproperty,))
 
         @classproperty
         def class_name(cls) -> str:
@@ -1232,6 +1251,31 @@ def test_model_export_inclusion_inheritance():
     assert actual == expected, 'Unexpected model export result'
 
 
+def test_untyped_fields_warning():
+    with pytest.raises(
+        PydanticUserError,
+        match=re.escape(
+            "A non-annotated attribute was detected: `x = 1`. All model fields require a type annotation; "
+            "if 'x' is not meant to be a field, you may be able to resolve this error by annotating it "
+            "as a ClassVar or updating model_config[\"ignored_types\"]."
+        ),
+    ):
+
+        class WarningModel(BaseModel):
+            x = 1
+
+    # Prove that annotating with ClassVar prevents the warning
+    class NonWarningModel(BaseModel):
+        x: ClassVar = 1
+
+
+def test_untyped_fields_error():
+    with pytest.raises(TypeError, match="Field 'a' requires a type annotation"):
+
+        class Model(BaseModel):
+            a = Field('foobar')
+
+
 def test_custom_init_subclass_params():
     class DerivedModel(BaseModel):
         def __init_subclass__(cls, something):
@@ -1243,7 +1287,7 @@ def test_custom_init_subclass_params():
     # to allow the special method __init_subclass__ to be defined with custom
     # parameters on extended BaseModel classes.
     class NewModel(DerivedModel, something=2):
-        something = 1
+        something: ClassVar = 1
 
     assert NewModel.something == 2
 
@@ -1743,17 +1787,14 @@ def test_extra_args_to_field_type_error():
 
 
 def test_deeper_recursive_model():
-    class A(BaseModel):
+    class A(BaseModel, undefined_types_warning=False):
         b: 'B'
-        model_config = {'undefined_types_warning': False}
 
-    class B(BaseModel):
+    class B(BaseModel, undefined_types_warning=False):
         c: 'C'
-        model_config = {'undefined_types_warning': False}
 
-    class C(BaseModel):
+    class C(BaseModel, undefined_types_warning=False):
         a: Optional['A']
-        model_config = {'undefined_types_warning': False}
 
     A.model_rebuild()
     B.model_rebuild()
