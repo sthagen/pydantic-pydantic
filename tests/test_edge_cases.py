@@ -12,12 +12,12 @@ from pydantic_core import core_schema
 from typing_extensions import get_args
 
 from pydantic import (
+    AnalyzedType,
     BaseModel,
     ConfigDict,
     Extra,
     PydanticSchemaGenerationError,
     ValidationError,
-    Validator,
     constr,
     errors,
 )
@@ -1226,10 +1226,9 @@ def test_multiple_errors():
     assert Model(a=None).a is None
 
 
-def test_validate_all():
-    # TODO remove or rename, validate_all doesn't exist anymore
+def test_validate_default():
     class Model(BaseModel):
-        model_config = ConfigDict(validate_all=True)
+        model_config = ConfigDict(validate_default=True)
         a: int
         b: int
 
@@ -1250,7 +1249,7 @@ def test_force_extra():
 
 
 def test_illegal_extra_value():
-    with pytest.raises(ValueError, match='is not a valid value for "extra"'):
+    with pytest.raises(ValueError, match=re.escape("is not a valid value for config['extra']")):
 
         class Model(BaseModel):
             model_config = ConfigDict(extra='foo')
@@ -1258,48 +1257,34 @@ def test_illegal_extra_value():
 
 
 def test_multiple_inheritance_config():
-    def int_encoder(x):
-        return x + 1
-
-    def int2_encoder(x):
-        return x + 2
-
-    def str_encoder(x):
-        return x.upper()
-
     class Parent(BaseModel):
-        model_config = ConfigDict(frozen=True, extra=Extra.forbid, json_encoders={int: int_encoder})
+        model_config = ConfigDict(frozen=True, extra=Extra.forbid)
 
     class Mixin(BaseModel):
-        model_config = ConfigDict(use_enum_values=True, json_encoders={int: int2_encoder})
+        model_config = ConfigDict(use_enum_values=True)
 
-    class Child(Mixin, Parent, json_encoders={str: str_encoder}):
+    class Child(Mixin, Parent):
         model_config = ConfigDict(populate_by_name=True)
 
     assert BaseModel.model_config['frozen'] is False
     assert BaseModel.model_config['populate_by_name'] is False
     assert BaseModel.model_config['extra'] is None
     assert BaseModel.model_config['use_enum_values'] is False
-    assert BaseModel.model_config['json_encoders'] == {}
 
     assert Parent.model_config['frozen'] is True
     assert Parent.model_config['populate_by_name'] is False
     assert Parent.model_config['extra'] is Extra.forbid
     assert Parent.model_config['use_enum_values'] is False
-    assert Parent.model_config['json_encoders'][int] is int_encoder
 
     assert Mixin.model_config['frozen'] is False
     assert Mixin.model_config['populate_by_name'] is False
     assert Mixin.model_config['extra'] is None
     assert Mixin.model_config['use_enum_values'] is True
-    assert Mixin.model_config['json_encoders'][int] is int2_encoder
 
     assert Child.model_config['frozen'] is True
     assert Child.model_config['populate_by_name'] is True
     assert Child.model_config['extra'] is Extra.forbid
     assert Child.model_config['use_enum_values'] is True
-    assert Child.model_config['json_encoders'][str] is str_encoder
-    assert Child.model_config['json_encoders'][int] is int_encoder
 
 
 def test_submodel_different_type():
@@ -1925,8 +1910,8 @@ def test_custom_generic_validators():
             if not args:
                 return schema
 
-            t1_f = Validator(args[0])
-            t2_f = Validator(args[1])
+            t1_f = AnalyzedType(args[0]).validate_python
+            t2_f = AnalyzedType(args[1]).validate_python
 
             def validate(v, info):
                 if not args:
@@ -2149,10 +2134,10 @@ def test_iter_coverage():
         x: int = 1
         y: str = 'a'
 
-    # with pytest.warns(
-    #     DeprecationWarning, match='This private method is only used for `BaseModel.copy`, which is deprecated'
-    # ):
-    assert list(MyModel()._iter(by_alias=True)) == [('x', 1), ('y', 'a')]
+    with pytest.warns(
+        DeprecationWarning, match='The private method `_iter` will be removed and should no longer be used.'
+    ):
+        assert list(MyModel()._iter(by_alias=True)) == [('x', 1), ('y', 'a')]
 
 
 @pytest.mark.xfail(reason='field frozen')

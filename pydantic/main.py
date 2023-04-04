@@ -3,24 +3,21 @@ Logic for creating models, could perhaps be renamed to `models.py`.
 """
 from __future__ import annotations as _annotations
 
-import sys
 import typing
 import warnings
 from abc import ABCMeta
 from copy import copy, deepcopy
-from enum import Enum
-from functools import partial
 from inspect import getdoc
+from pathlib import Path
 from types import prepare_class, resolve_bases
-from typing import Any, Generic, TypeVar, overload
+from typing import Any, Generic
 
+import pydantic_core
 import typing_extensions
-from pydantic_core import CoreConfig, SchemaValidator
 
 from ._internal import (
     _decorators,
     _forward_ref,
-    _generate_schema,
     _generics,
     _model_construction,
     _repr,
@@ -29,15 +26,16 @@ from ._internal import (
 )
 from ._internal._fields import Undefined
 from .config import BaseConfig, ConfigDict, Extra, build_config, get_config
+from .deprecated import copy_internals as _deprecated_copy_internals
+from .deprecated import parse as _deprecated_parse
 from .errors import PydanticUndefinedAnnotation, PydanticUserError
 from .fields import Field, FieldInfo, ModelPrivateAttr
-from .json import custom_pydantic_encoder, pydantic_encoder
-from .json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaMetadata, model_json_schema
+from .json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaValue, model_json_schema
 
 if typing.TYPE_CHECKING:
     from inspect import Signature
 
-    from pydantic_core import CoreSchema, SchemaSerializer
+    from pydantic_core import CoreSchema, SchemaSerializer, SchemaValidator
 
     from ._internal._generate_schema import GenerateSchema
     from ._internal._utils import AbstractSetIntStr, MappingIntStrAny
@@ -48,7 +46,7 @@ if typing.TYPE_CHECKING:
     # should be `set[int] | set[str] | dict[int, IncEx] | dict[str, IncEx] | None`, but mypy can't cope
     IncEx = set[int] | set[str] | dict[int, Any] | dict[str, Any] | None
 
-__all__ = 'BaseModel', 'create_model', 'Validator'
+__all__ = 'BaseModel', 'create_model'
 
 _object_setattr = _model_construction.object_setattr
 # Note `ModelMetaclass` refers to `BaseModel`, but is also used to *create* `BaseModel`, so we need to add this extra
@@ -60,7 +58,7 @@ _base_class_defined = False
 
 @typing_extensions.dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
 class ModelMetaclass(ABCMeta):
-    def __new__(  # noqa C901
+    def __new__(
         mcs,
         cls_name: str,
         bases: tuple[type[Any], ...],
@@ -100,12 +98,6 @@ class ModelMetaclass(ABCMeta):
 
             namespace['__class_vars__'] = class_vars
             namespace['__private_attributes__'] = {**base_private_attributes, **private_attributes}
-
-            if config_new['json_encoders']:
-                json_encoder = partial(custom_pydantic_encoder, config_new['json_encoders'])
-            else:
-                json_encoder = pydantic_encoder  # type: ignore[assignment]
-            namespace['__json_encoder__'] = staticmethod(json_encoder)
 
             if '__hash__' not in namespace and config_new['frozen']:
 
@@ -183,7 +175,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         __pydantic_decorators__: typing.ClassVar[_decorators.DecoratorInfos]
         """metadata for `@validator`, `@root_validator` and `@serializer` decorators"""
         model_fields: typing.ClassVar[dict[str, FieldInfo]] = {}
-        __json_encoder__: typing.ClassVar[typing.Callable[[Any], Any]] = lambda x: x  # noqa: E731
         __signature__: typing.ClassVar[Signature]
         __private_attributes__: typing.ClassVar[dict[str, ModelPrivateAttr]]
         __class_vars__: typing.ClassVar[set[str]]
@@ -221,24 +212,31 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         return gen_schema.model_schema(cls)
 
     @classmethod
-    def model_validate(cls: type[Model], obj: Any) -> Model:
+    def model_validate(
+        cls: type[Model], obj: Any, *, strict: bool | None = None, context: dict[str, Any] | None = None
+    ) -> Model:
         # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
         __tracebackhide__ = True
-        return cls.__pydantic_validator__.validate_python(obj)
+        return cls.__pydantic_validator__.validate_python(obj, strict=strict, context=context)
 
     @classmethod
-    def model_validate_json(cls: type[Model], json_data: str | bytes | bytearray) -> Model:
+    def model_validate_json(
+        cls: type[Model],
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Model:
         # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
         __tracebackhide__ = True
-        return cls.__pydantic_validator__.validate_json(json_data)
+        return cls.__pydantic_validator__.validate_json(json_data, strict=strict, context=context)
 
     if typing.TYPE_CHECKING:
         # model_after_init is called after at the end of `__init__` if it's defined
         def model_post_init(self, _context: Any) -> None:
             pass
 
-    @typing.no_type_check
-    def __setattr__(self, name, value):
+    def __setattr__(self, name: str, value: Any) -> None:
         if name in self.__class_vars__:
             raise AttributeError(
                 f'"{name}" is a ClassVar of `{self.__class__.__name__}` and cannot be set on an instance. '
@@ -330,11 +328,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         ).decode()
 
     @classmethod
-    def from_orm(cls: type[Model], obj: Any) -> Model:
-        # TODO remove
-        return cls.model_validate(obj)
-
-    @classmethod
     def model_construct(cls: type[Model], _fields_set: set[str] | None = None, **values: Any) -> Model:
         """
         Creates a new model setting __dict__ and __fields_set__ from trusted or pre-validated data.
@@ -359,72 +352,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             m.__pydantic_post_init__(context=None)
         return m
 
-    def _copy_and_set_values(self: Model, values: dict[str, Any], fields_set: set[str], *, deep: bool) -> Model:
-        if deep:
-            # chances of having empty dict here are quite low for using smart_deepcopy
-            values = deepcopy(values)
-
-        cls = self.__class__
-        m = cls.__new__(cls)
-        _object_setattr(m, '__dict__', values)
-        _object_setattr(m, '__fields_set__', fields_set)
-        for name in self.__private_attributes__:
-            value = getattr(self, name, Undefined)
-            if value is not Undefined:
-                if deep:
-                    value = deepcopy(value)
-                _object_setattr(m, name, value)
-
-        return m
-
-    # @typing_extensions.deprecated('This method is now deprecated; use `model_copy` instead')
-    def copy(
-        self: Model,
-        *,
-        include: AbstractSetIntStr | MappingIntStrAny | None = None,
-        exclude: AbstractSetIntStr | MappingIntStrAny | None = None,
-        update: dict[str, Any] | None = None,
-        deep: bool = False,
-    ) -> Model:
-        """
-        This method is now deprecated; use `model_copy` instead. If you need include / exclude, use:
-
-            data = self.model_dump(include=include, exclude=exclude, round_trip=True)
-            data = {**data, **(update or {})}
-            copied = self.model_validate(data)
-
-        Duplicate a model, optionally choose which fields to include, exclude and change.
-
-        :param include: fields to include in new model
-        :param exclude: fields to exclude from new model, as with values this takes precedence over include
-        :param update: values to change/add in the new model. Note: the data is not validated before creating
-            the new model: you should trust this data
-        :param deep: set to `True` to make a deep copy of the model
-        :return: new model instance
-        """
-        warnings.warn(
-            'The `copy` method is deprecated; use `model_copy` instead. '
-            'See the docstring of `BaseModel.copy` for details about how to handle include / exclude / update.',
-            DeprecationWarning,
-        )
-
-        values = dict(
-            self._iter(to_dict=False, by_alias=False, include=include, exclude=exclude, exclude_unset=False),
-            **(update or {}),
-        )
-
-        # new `__fields_set__` can have unset optional fields with a set value in `update` kwarg
-        if update:
-            fields_set = self.__fields_set__ | update.keys()
-        else:
-            fields_set = set(self.__fields_set__)
-
-        # removing excluded fields from `__fields_set__`
-        if exclude:
-            fields_set -= set(exclude)
-
-        return self._copy_and_set_values(values, fields_set, deep=deep)
-
     @classmethod
     def model_json_schema(
         cls,
@@ -437,109 +364,22 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         with your desired modifications, then override this method on a custom base class and set the default
         value of `schema_generator` to be your subclass.
         """
-        return model_json_schema(cls, by_alias, ref_template, schema_generator)
+        return model_json_schema(cls, by_alias=by_alias, ref_template=ref_template, schema_generator=schema_generator)
 
     @classmethod
-    def model_json_schema_metadata(cls) -> JsonSchemaMetadata | None:
+    def model_modify_json_schema(cls, json_schema: JsonSchemaValue) -> JsonSchemaValue:
         """
-        Overriding this method provides a simple way to modify certain aspects of the JSON schema generation.
+        Overriding this method provides a simple way to modify the JSON schema generated for the model.
 
-        This is a convenience method primarily intended to control how the "generic" properties
-        of the JSON schema are populated, or apply minor transformations through `extra_updates` or
-        `modify_js_function`. See https://json-schema.org/understanding-json-schema/reference/generic.html
-        and the comments surrounding the definition of `JsonSchemaMetadata` for more details.
+        This is a convenience method primarily intended to control how the "generic" properties of the JSON schema
+        are populated. See https://json-schema.org/understanding-json-schema/reference/generic.html for more details.
 
-        If you want to make more sweeping changes to how the JSON schema is generated, you will probably
-        want to subclass `GenerateJsonSchema` and pass your subclass in the `schema_generator` argument to the
-        `model_json_schema` method.
+        If you want to make more sweeping changes to how the JSON schema is generated, you will probably want to create
+        a subclass of `GenerateJsonSchema` and pass it as `schema_generator` in `BaseModel.model_json_schema`.
         """
-        title = cls.model_config['title'] or cls.__name__
-        description = getdoc(cls) or None
-        return {'title': title, 'description': description}
-
-    @classmethod
-    def schema_json(
-        cls, *, by_alias: bool = True, ref_template: str = DEFAULT_REF_TEMPLATE, **dumps_kwargs: Any
-    ) -> str:
-        from .json import pydantic_encoder
-
-        return cls.model_config['json_dumps'](
-            cls.model_json_schema(by_alias=by_alias, ref_template=ref_template),
-            default=pydantic_encoder,
-            **dumps_kwargs,
-        )
-
-    @classmethod
-    # @typing_extensions.deprecated('This method is only used for _iter, which is deprecated')
-    @typing.no_type_check
-    def _get_value(
-        cls,
-        v: Any,
-        to_dict: bool,
-        by_alias: bool,
-        include: AbstractSetIntStr | MappingIntStrAny | None,
-        exclude: AbstractSetIntStr | MappingIntStrAny | None,
-        exclude_unset: bool,
-        exclude_defaults: bool,
-        exclude_none: bool,
-    ) -> Any:
-        if isinstance(v, BaseModel):
-            if to_dict:
-                return v.model_dump(
-                    by_alias=by_alias,
-                    exclude_unset=exclude_unset,
-                    exclude_defaults=exclude_defaults,
-                    include=include,
-                    exclude=exclude,
-                    exclude_none=exclude_none,
-                )
-            else:
-                return v.copy(include=include, exclude=exclude)
-
-        value_exclude = _utils.ValueItems(v, exclude) if exclude else None
-        value_include = _utils.ValueItems(v, include) if include else None
-
-        if isinstance(v, dict):
-            return {
-                k_: cls._get_value(
-                    v_,
-                    to_dict=to_dict,
-                    by_alias=by_alias,
-                    exclude_unset=exclude_unset,
-                    exclude_defaults=exclude_defaults,
-                    include=value_include and value_include.for_element(k_),
-                    exclude=value_exclude and value_exclude.for_element(k_),
-                    exclude_none=exclude_none,
-                )
-                for k_, v_ in v.items()
-                if (not value_exclude or not value_exclude.is_excluded(k_))
-                and (not value_include or value_include.is_included(k_))
-            }
-
-        elif _utils.sequence_like(v):
-            seq_args = (
-                cls._get_value(
-                    v_,
-                    to_dict=to_dict,
-                    by_alias=by_alias,
-                    exclude_unset=exclude_unset,
-                    exclude_defaults=exclude_defaults,
-                    include=value_include and value_include.for_element(i),
-                    exclude=value_exclude and value_exclude.for_element(i),
-                    exclude_none=exclude_none,
-                )
-                for i, v_ in enumerate(v)
-                if (not value_exclude or not value_exclude.is_excluded(i))
-                and (not value_include or value_include.is_included(i))
-            )
-
-            return v.__class__(*seq_args) if _typing_extra.is_namedtuple(v.__class__) else v.__class__(seq_args)
-
-        elif isinstance(v, Enum) and getattr(cls.model_config, 'use_enum_values', False):
-            return v.value
-
-        else:
-            return v
+        metadata = {'title': cls.model_config['title'] or cls.__name__, 'description': getdoc(cls) or None}
+        metadata = {k: v for k, v in metadata.items() if v is not None}
+        return {**metadata, **json_schema}
 
     @classmethod
     def model_rebuild(
@@ -575,98 +415,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         so `dict(model)` works
         """
         yield from self.__dict__.items()
-
-    # @typing_extensions.deprecated('This private method is only used for `BaseModel.copy`, which is deprecated')
-    def _iter(
-        self,
-        to_dict: bool = False,
-        by_alias: bool = False,
-        include: AbstractSetIntStr | MappingIntStrAny | None = None,
-        exclude: AbstractSetIntStr | MappingIntStrAny | None = None,
-        exclude_unset: bool = False,
-        exclude_defaults: bool = False,
-        exclude_none: bool = False,
-    ) -> TupleGenerator:
-        # Merge field set excludes with explicit exclude parameter with explicit overriding field set options.
-        # The extra "is not None" guards are not logically necessary but optimizes performance for the simple case.
-        if exclude is not None:
-            exclude = _utils.ValueItems.merge(
-                {k: v.exclude for k, v in self.model_fields.items() if v.exclude is not None}, exclude
-            )
-
-        if include is not None:
-            include = _utils.ValueItems.merge(
-                {k: v.include for k, v in self.model_fields.items()}, include, intersect=True
-            )
-
-        allowed_keys = self._calculate_keys(
-            include=include, exclude=exclude, exclude_unset=exclude_unset  # type: ignore
-        )
-        if allowed_keys is None and not (to_dict or by_alias or exclude_unset or exclude_defaults or exclude_none):
-            # huge boost for plain _iter()
-            yield from self.__dict__.items()
-            return
-
-        value_exclude = _utils.ValueItems(self, exclude) if exclude is not None else None
-        value_include = _utils.ValueItems(self, include) if include is not None else None
-
-        for field_key, v in self.__dict__.items():
-            if (allowed_keys is not None and field_key not in allowed_keys) or (exclude_none and v is None):
-                continue
-
-            if exclude_defaults:
-                try:
-                    field = self.model_fields[field_key]
-                except KeyError:
-                    pass
-                else:
-                    if not field.is_required() and field.default == v:
-                        continue
-
-            if by_alias and field_key in self.model_fields:
-                dict_key = self.model_fields[field_key].alias or field_key
-            else:
-                dict_key = field_key
-
-            if to_dict or value_include or value_exclude:
-                v = self._get_value(
-                    v,
-                    to_dict=to_dict,
-                    by_alias=by_alias,
-                    include=value_include and value_include.for_element(field_key),
-                    exclude=value_exclude and value_exclude.for_element(field_key),
-                    exclude_unset=exclude_unset,
-                    exclude_defaults=exclude_defaults,
-                    exclude_none=exclude_none,
-                )
-            yield dict_key, v
-
-    def _calculate_keys(
-        self,
-        include: MappingIntStrAny | None,
-        exclude: MappingIntStrAny | None,
-        exclude_unset: bool,
-        update: dict[str, Any] | None = None,
-    ) -> typing.AbstractSet[str] | None:
-        if include is None and exclude is None and exclude_unset is False:
-            return None
-
-        keys: typing.AbstractSet[str]
-        if exclude_unset:
-            keys = self.__fields_set__.copy()
-        else:
-            keys = self.__dict__.keys()
-
-        if include is not None:
-            keys &= include.keys()
-
-        if update:
-            keys -= update.keys()
-
-        if exclude:
-            keys -= {k for k, v in exclude.items() if _utils.ValueItems.is_true(v)}
-
-        return keys
 
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, BaseModel):
@@ -837,6 +585,251 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         params_component = ', '.join(param_names)
         return f'{cls.__name__}[{params_component}]'
 
+    # ##### Deprecated methods from v1 #####
+    def dict(
+        self,
+        *,
+        include: IncEx = None,
+        exclude: IncEx = None,
+        by_alias: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        exclude_none: bool = False,
+    ) -> typing.Dict[str, Any]:  # noqa UP006
+        warnings.warn('The `dict` method is deprecated; use `model_dump` instead.', DeprecationWarning)
+        return self.model_dump(
+            include=include,
+            exclude=exclude,
+            by_alias=by_alias,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            exclude_none=exclude_none,
+        )
+
+    def json(
+        self,
+        *,
+        include: IncEx = None,
+        exclude: IncEx = None,
+        by_alias: bool = False,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        exclude_none: bool = False,
+        # TODO: What do we do about the following arguments?
+        #   Do they need to go on model_config now, and get used by the serializer?
+        encoder: typing.Callable[[Any], Any] | None = Undefined,  # type: ignore[assignment]
+        models_as_dict: bool = Undefined,  # type: ignore[assignment]
+        **dumps_kwargs: Any,
+    ) -> str:
+        warnings.warn('The `json` method is deprecated; use `model_dump_json` instead.', DeprecationWarning)
+        if encoder is not Undefined:
+            raise TypeError('The `encoder` argument is no longer supported; use field serializers instead.')
+        if models_as_dict is not Undefined:
+            raise TypeError('The `models_as_dict` argument is no longer supported; use a model serializer instead.')
+        if dumps_kwargs:
+            raise TypeError('`dumps_kwargs` keyword arguments are no longer supported.')
+        return self.model_dump_json(
+            include=include,
+            exclude=exclude,
+            by_alias=by_alias,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            exclude_none=exclude_none,
+        )
+
+    @classmethod
+    def parse_obj(cls: type[Model], obj: Any) -> Model:
+        warnings.warn('The `parse_obj` method is deprecated; use `model_validate` instead.', DeprecationWarning)
+        return cls.model_validate(obj)
+
+    @classmethod
+    def parse_raw(
+        cls: type[Model],
+        b: str | bytes,
+        *,
+        content_type: str = None,
+        encoding: str = 'utf8',
+        proto: _deprecated_parse.Protocol = None,
+        allow_pickle: bool = False,
+    ) -> Model:
+        warnings.warn(
+            'The `parse_raw` method is deprecated; if your data is JSON use `model_json_validate`, '
+            'otherwise load the data then use `model_validate` instead.',
+            DeprecationWarning,
+        )
+        try:
+            obj = _deprecated_parse.load_str_bytes(
+                b,
+                proto=proto,
+                content_type=content_type,
+                encoding=encoding,
+                allow_pickle=allow_pickle,
+            )
+        except (ValueError, TypeError) as exc:
+            import json
+
+            # try to match V1
+            if isinstance(exc, UnicodeDecodeError):
+                type_str = 'value_error.unicodedecode'
+            elif isinstance(exc, json.JSONDecodeError):
+                type_str = 'value_error.jsondecode'
+            elif isinstance(exc, ValueError):
+                type_str = 'value_error'
+            else:
+                type_str = 'type_error'
+
+            # ctx is missing here, but since we've added `input` to the error, we're not pretending it's the same
+            error: pydantic_core.InitErrorDetails = {
+                'type': pydantic_core.PydanticCustomError(type_str, str(exc)),
+                'loc': ('__root__',),
+                'input': b,
+            }
+            raise pydantic_core.ValidationError(cls.__name__, [error])
+        return cls.model_validate(obj)
+
+    @classmethod
+    def parse_file(
+        cls: type[Model],
+        path: str | Path,
+        *,
+        content_type: str = None,
+        encoding: str = 'utf8',
+        proto: _deprecated_parse.Protocol = None,
+        allow_pickle: bool = False,
+    ) -> Model:
+        warnings.warn(
+            'The `parse_file` method is deprecated; load the data from file, then if your data is JSON '
+            'use `model_json_validate` otherwise `model_validate` instead.',
+            DeprecationWarning,
+        )
+        obj = _deprecated_parse.load_file(
+            path,
+            proto=proto,
+            content_type=content_type,
+            encoding=encoding,
+            allow_pickle=allow_pickle,
+        )
+        return cls.parse_obj(obj)
+
+    @classmethod
+    def from_orm(cls: type[Model], obj: Any) -> Model:
+        warnings.warn(
+            'The `from_orm` method is deprecated; set model_config["from_attributes"]=True '
+            'and use `model_validate` instead.',
+            DeprecationWarning,
+        )
+        if not cls.model_config['from_attributes']:
+            raise PydanticUserError('You must set the config attribute `from_attributes=True` to use from_orm')
+        return cls.model_validate(obj)
+
+    @classmethod
+    def construct(cls: type[Model], _fields_set: set[str] | None = None, **values: Any) -> Model:
+        warnings.warn('The `construct` method is deprecated; use `model_construct` instead.', DeprecationWarning)
+        return cls.model_construct(_fields_set=_fields_set, **values)
+
+    def copy(
+        self: Model,
+        *,
+        include: AbstractSetIntStr | MappingIntStrAny | None = None,
+        exclude: AbstractSetIntStr | MappingIntStrAny | None = None,
+        update: typing.Dict[str, Any] | None = None,  # noqa UP006
+        deep: bool = False,
+    ) -> Model:
+        """
+        This method is now deprecated; use `model_copy` instead. If you need include / exclude, use:
+
+            data = self.model_dump(include=include, exclude=exclude, round_trip=True)
+            data = {**data, **(update or {})}
+            copied = self.model_validate(data)
+        """
+        warnings.warn(
+            'The `copy` method is deprecated; use `model_copy` instead. '
+            'See the docstring of `BaseModel.copy` for details about how to handle `include` and `exclude`.',
+            DeprecationWarning,
+        )
+
+        values = dict(
+            _deprecated_copy_internals._iter(
+                self, to_dict=False, by_alias=False, include=include, exclude=exclude, exclude_unset=False
+            ),
+            **(update or {}),
+        )
+
+        # new `__fields_set__` can have unset optional fields with a set value in `update` kwarg
+        if update:
+            fields_set = self.__fields_set__ | update.keys()
+        else:
+            fields_set = set(self.__fields_set__)
+
+        # removing excluded fields from `__fields_set__`
+        if exclude:
+            fields_set -= set(exclude)
+
+        return _deprecated_copy_internals._copy_and_set_values(self, values, fields_set, deep=deep)
+
+    @classmethod
+    def schema(
+        cls, by_alias: bool = True, ref_template: str = DEFAULT_REF_TEMPLATE
+    ) -> typing.Dict[str, Any]:  # noqa UP006
+        warnings.warn('The `schema` method is deprecated; use `model_json_schema` instead.', DeprecationWarning)
+        return cls.model_json_schema(by_alias=by_alias, ref_template=ref_template)
+
+    @classmethod
+    def schema_json(
+        cls, *, by_alias: bool = True, ref_template: str = DEFAULT_REF_TEMPLATE, **dumps_kwargs: Any
+    ) -> str:
+        import json
+
+        warnings.warn(
+            'The `schema_json` method is deprecated; use `model_json_schema` and json.dumps instead.',
+            DeprecationWarning,
+        )
+        from .deprecated.json import pydantic_encoder
+
+        return json.dumps(
+            cls.model_json_schema(by_alias=by_alias, ref_template=ref_template),
+            default=pydantic_encoder,
+            **dumps_kwargs,
+        )
+
+    @classmethod
+    def validate(cls: type[Model], value: Any) -> Model:
+        warnings.warn('The `validate` method is deprecated; use `model_validate` instead.', DeprecationWarning)
+        return cls.model_validate(value)
+
+    @classmethod
+    def update_forward_refs(cls, **localns: Any) -> None:
+        warnings.warn(
+            'The `update_forward_refs` method is deprecated; use `model_rebuild` instead.', DeprecationWarning
+        )
+        if localns:
+            raise TypeError('`localns` arguments are not longer accepted.')
+        cls.model_rebuild(force=True)
+
+    def _iter(self, *args: Any, **kwargs: Any) -> Any:
+        warnings.warn('The private method `_iter` will be removed and should no longer be used.', DeprecationWarning)
+        return _deprecated_copy_internals._iter(self, *args, **kwargs)
+
+    def _copy_and_set_values(self, *args: Any, **kwargs: Any) -> Any:
+        warnings.warn(
+            'The private method  `_copy_and_set_values` will be removed and should no longer be used.',
+            DeprecationWarning,
+        )
+        return _deprecated_copy_internals._copy_and_set_values(self, *args, **kwargs)
+
+    @classmethod
+    def _get_value(cls, *args: Any, **kwargs: Any) -> Any:
+        warnings.warn(
+            'The private method  `_get_value` will be removed and should no longer be used.', DeprecationWarning
+        )
+        return _deprecated_copy_internals._get_value(cls, *args, **kwargs)
+
+    def _calculate_keys(self, *args: Any, **kwargs: Any) -> Any:
+        warnings.warn(
+            'The private method `_calculate_keys` will be removed and should no longer be used.', DeprecationWarning
+        )
+        return _deprecated_copy_internals._calculate_keys(self, *args, **kwargs)
+
 
 _base_class_defined = True
 
@@ -937,82 +930,13 @@ def create_model(
         namespace.update(__validators__)
     namespace.update(fields)
     if __config__:
-        namespace['model_config'] = get_config(__config__)
+        namespace['model_config'] = get_config(__config__, __model_name)
     resolved_bases = resolve_bases(__base__)
     meta, ns, kwds = prepare_class(__model_name, resolved_bases, kwds=__cls_kwargs__)
     if resolved_bases is not __base__:
         ns['__orig_bases__'] = __base__
     namespace.update(ns)
     return meta(__model_name, resolved_bases, namespace, __pydantic_reset_parent_namespace__=False, **kwds)
-
-
-T = TypeVar('T')
-
-
-class Validator(Generic[T]):
-    @overload
-    def __init__(self, __type: type[T], *, config: CoreConfig | None = None) -> None:
-        ...
-
-    # Adding this overload ensures you can use special forms without getting mypy errors.
-    # For example:
-    #   v: Validator[int | str] = Validator(int | str)
-    # Type checkers don't consider special forms like `int | str` (or `Union[int, str]`) to satisfy a Type[T]
-    @overload
-    def __init__(self, __type: Any, *, config: CoreConfig | None = None) -> None:
-        ...
-
-    def __init__(self, __type: Any, *, config: CoreConfig | None = None) -> None:
-        self._type = __type
-        merged_config: CoreConfig = {
-            **(config or {}),  # type: ignore[misc]
-            **getattr(__type, 'model_config', {}),
-        }
-        arbitrary_types = bool((config or {}).get('arbitrary_types_allowed', False))
-        local_ns = _typing_extra.parent_frame_namespace(parent_depth=2)
-        # BaseModel uses it's own __module__ to find out where it was defined
-        # and then look for symbols to resolve forward references in those globals
-        # On the other hand Validator() can be called with arbitrary objects,
-        # including type aliases where __module__ (always `typing.py`) is not useful
-        # So instead we look at the globals in our parent stack frame
-        # This works for the case where Validator() is called in a module that
-        # has the target of forward references in its scope but
-        # does not work for more complex cases
-        # for example, take the following:
-        #
-        # a.py
-        # ```python
-        # from typing import List, Dict
-        # IntList = List[int]
-        # OuterDict = Dict[str, 'IntList']
-        # ```
-        #
-        # b.py
-        # ```python
-        # from pydantic import Validator
-        # from a import OuterDict
-        # IntList = int  # replaces the symbol the forward reference is looking for
-        # v = Validator(OuterDict)
-        # v({"x": 1})  # should fail but doesn't
-        # ```
-        #
-        # If OuterDict were a BaseModel this would work because it would resolve
-        # the forward reference within the `a.py` namespace.
-        # But Validator(OuterDict) can't know what module OuterDict came from.
-        # In other words, the assumption that _all_ forward references exist in the
-        # module we are being called from is not technically always true
-        # Although most of the time it is and it works fine for recursive models and such/
-        # BaseModel's behavior isn't perfect either and _can_ break in similar ways,
-        # so there is no right or wrong between the two.
-        # But at the very least this behavior is _subtly_ different from BaseModel's.
-        global_ns = sys._getframe(1).f_globals.copy()
-        global_ns.update(local_ns or {})
-        gen = _generate_schema.GenerateSchema(arbitrary_types=arbitrary_types, types_namespace=global_ns)
-        schema = gen.generate_schema(__type)
-        self._validator = SchemaValidator(schema, config=merged_config)
-
-    def __call__(self, __input: Any) -> T:
-        return self._validator.validate_python(__input)
 
 
 def _collect_bases_data(bases: tuple[type[Any], ...]) -> tuple[set[str], set[str], dict[str, ModelPrivateAttr]]:

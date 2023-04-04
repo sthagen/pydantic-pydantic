@@ -47,10 +47,8 @@ from pydantic.dataclasses import dataclass
 from pydantic.errors import PydanticInvalidForJsonSchema
 from pydantic.fields import FieldInfo
 from pydantic.json_schema import (
-    _JSON_SCHEMA_CACHE,
     DEFAULT_REF_TEMPLATE,
     GenerateJsonSchema,
-    JsonSchemaMetadata,
     PydanticJsonSchemaWarning,
     model_json_schema,
     models_json_schema,
@@ -91,29 +89,6 @@ except ImportError:
     email_validator = None
 
 T = TypeVar('T')
-
-
-def test_key():
-    class ApplePie(BaseModel):
-        """
-        This is a test.
-        """
-
-        a: float
-        b: int = 10
-
-    s = {
-        'type': 'object',
-        'properties': {'a': {'type': 'number', 'title': 'A'}, 'b': {'type': 'integer', 'title': 'B', 'default': 10}},
-        'required': ['a'],
-        'title': 'ApplePie',
-        'description': 'This is a test.',
-    }
-
-    assert _JSON_SCHEMA_CACHE.get(ApplePie) is None
-    assert ApplePie.model_json_schema() == s
-    assert _JSON_SCHEMA_CACHE[ApplePie].keys() == {(True, '#/$defs/{model}', GenerateJsonSchema)}
-    assert ApplePie.model_json_schema() == s
 
 
 def test_by_alias():
@@ -166,7 +141,7 @@ def test_ref_template():
         'anyOf': [{'$ref': '#/$defs/KeyLimePie'}, {'type': 'null'}],
         'default': None,
     }
-    json_schema = ApplePie.schema_json(ref_template='foobar/{model}.json')
+    json_schema = json.dumps(ApplePie.model_json_schema(ref_template='foobar/{model}.json'))
     assert 'foobar/KeyLimePie.json' in json_schema
     assert '#/$defs/KeyLimePie' not in json_schema
 
@@ -275,21 +250,29 @@ def test_choices():
         },
         'required': ['foo', 'bar'],
         '$defs': {
-            'FooEnum': {'title': 'FooEnum', 'description': 'An enumeration.', 'enum': ['f', 'b']},
-            'BarEnum': {'title': 'BarEnum', 'description': 'An enumeration.', 'type': 'integer', 'enum': [1, 2]},
-            'SpamEnum': {'title': 'SpamEnum', 'description': 'An enumeration.', 'type': 'string', 'enum': ['f', 'b']},
+            'FooEnum': {'title': 'FooEnum', 'enum': ['f', 'b']},
+            'BarEnum': {'title': 'BarEnum', 'type': 'integer', 'enum': [1, 2]},
+            'SpamEnum': {'title': 'SpamEnum', 'type': 'string', 'enum': ['f', 'b']},
         },
     }
 
 
 def test_enum_modify_schema():
     class SpamEnum(str, Enum):
+        """
+        Spam enum.
+        """
+
         foo = 'f'
         bar = 'b'
 
         @classmethod
         def __pydantic_modify_json_schema__(cls, field_schema):
+            existing_comment = field_schema.get('$comment', '')
+            field_schema['$comment'] = existing_comment + 'comment'  # make sure this function is only called once
+
             field_schema['tsEnumNames'] = [e.name for e in cls]
+            return field_schema
 
     class Model(BaseModel):
         spam: Optional[SpamEnum] = Field(None)
@@ -297,7 +280,8 @@ def test_enum_modify_schema():
     assert Model.model_json_schema() == {
         '$defs': {
             'SpamEnum': {
-                'description': 'An enumeration.',
+                '$comment': 'comment',
+                'description': 'Spam enum.',
                 'enum': ['f', 'b'],
                 'title': 'SpamEnum',
                 'tsEnumNames': ['foo', 'bar'],
@@ -323,7 +307,6 @@ def test_enum_schema_custom_field():
     assert Model.model_json_schema() == {
         '$defs': {
             'FooBarEnum': {
-                'description': 'An enumeration.',
                 'enum': ['foo', 'bar'],
                 'title': 'FooBarEnum',
                 'type': 'string',
@@ -381,7 +364,6 @@ def test_enum_and_model_have_same_behaviour():
                 'type': 'object',
             },
             'Names': {
-                'description': 'An enumeration.',
                 'enum': ['Rick', 'Morty', 'Summer'],
                 'title': 'Names',
                 'type': 'string',
@@ -420,7 +402,6 @@ def test_enum_includes_extra_without_other_params():
     assert Foo.model_json_schema() == {
         '$defs': {
             'Names': {
-                'description': 'An enumeration.',
                 'enum': ['Rick', 'Morty', 'Summer'],
                 'title': 'Names',
                 'type': 'string',
@@ -448,7 +429,6 @@ def test_list_enum_schema_extras():
     assert Model.model_json_schema() == {
         '$defs': {
             'FoodChoice': {
-                'description': 'An enumeration.',
                 'enum': ['spam', 'egg', 'chips'],
                 'title': 'FoodChoice',
                 'type': 'string',
@@ -505,12 +485,17 @@ def test_json_schema():
     #     Decision: What we have in v1 is not bad enough to be worth changing
     #     (i.e., keep it as only 'number'; maybe add a comment that other things could be okay)
 
-    assert json.loads(Model.schema_json(indent=2)) == {
+    with pytest.warns(
+        DeprecationWarning,
+        match=re.escape('The `schema_json` method is deprecated; use `model_json_schema` and json.dumps instead.'),
+    ):
+        schema_json = Model.schema_json(indent=2)
+    assert json.loads(schema_json) == {
         'title': 'Model',
         'type': 'object',
         'properties': {
             'a': {'title': 'A', 'default': 'foobar', 'type': 'string', 'format': 'binary'},
-            'b': {'title': 'B', 'default': 12.34, 'type': 'number'},
+            'b': {'title': 'B', 'default': '12.34', 'type': 'number'},
         },
     }
 
@@ -771,16 +756,16 @@ def test_date_types(field_type, expected_schema):
         (condate(), {}),
         (
             condate(gt=date(2010, 1, 1), lt=date(2021, 2, 2)),
-            {'exclusiveMinimum': '2010-01-01', 'exclusiveMaximum': '2021-02-02'},
+            {'exclusiveMinimum': date(2010, 1, 1), 'exclusiveMaximum': date(2021, 2, 2)},
         ),
-        (condate(ge=date(2010, 1, 1), le=date(2021, 2, 2)), {'minimum': '2010-01-01', 'maximum': '2021-02-02'}),
+        (condate(ge=date(2010, 1, 1), le=date(2021, 2, 2)), {'minimum': date(2010, 1, 1), 'maximum': date(2021, 2, 2)}),
     ],
 )
 def test_date_constrained_types(field_type, expected_schema):
     class Model(BaseModel):
         a: field_type
 
-    assert json.loads(Model.schema_json()) == {
+    assert Model.model_json_schema() == {
         'title': 'Model',
         'type': 'object',
         'properties': {'a': {'title': 'A', 'type': 'string', 'format': 'date', **expected_schema}},
@@ -2116,6 +2101,7 @@ def test_path_modify_schema():
         @classmethod
         def __pydantic_modify_json_schema__(cls, schema):
             schema.update(foobar=123)
+            return schema
 
     class Model(BaseModel):
         path1: Path
@@ -2297,9 +2283,7 @@ def test_schema_for_generic_field():
         ) -> core_schema.PlainValidatorFunctionSchema:
             source_args = getattr(source, '__args__', [Any])
             param = source_args[0]
-            metadata = build_metadata_dict(
-                js_metadata=JsonSchemaMetadata(core_schema_override=gen_schema.generate_schema(param))
-            )
+            metadata = build_metadata_dict(js_cs_override=gen_schema.generate_schema(param))
             return core_schema.general_plain_validator_function(
                 GenModel,
                 metadata=metadata,
@@ -2329,6 +2313,7 @@ def test_schema_for_generic_field():
         def __pydantic_modify_json_schema__(cls, field_schema):
             type = field_schema.pop('type', 'other')
             field_schema.update(anyOf=[{'type': type}, {'type': 'array', 'items': {'type': type}}])
+            return field_schema
 
     class ModelModified(BaseModel):
         data: GenModelModified[str]
@@ -2353,10 +2338,9 @@ def test_namedtuple_default():
         y: float
 
     class LocationBase(BaseModel):
-        coords: Coordinates = Coordinates(0, 0)
+        coords: Coordinates = Coordinates(34, 42)
 
     assert LocationBase(coords=Coordinates(1, 2)).coords == Coordinates(1, 2)
-    # assert LocationBase.__pydantic_core_schema__ == {}
 
     assert LocationBase.model_json_schema() == {
         'title': 'LocationBase',
@@ -2364,7 +2348,7 @@ def test_namedtuple_default():
         'properties': {
             'coords': {
                 'title': 'Coords',
-                'default': Coordinates(x=0, y=0),
+                'default': [34, 42],
                 'type': 'array',
                 'prefixItems': [{'title': 'X', 'type': 'number'}, {'title': 'Y', 'type': 'number'}],
                 'minItems': 2,
@@ -2396,9 +2380,7 @@ def test_advanced_generic_schema():
         ) -> core_schema.PlainValidatorFunctionSchema:
             if hasattr(source, '__args__'):
                 param = source.__args__[0]
-                metadata = build_metadata_dict(
-                    js_metadata=JsonSchemaMetadata(core_schema_override=gen_schema.generate_schema(Optional[param]))
-                )
+                metadata = build_metadata_dict(js_cs_override=gen_schema.generate_schema(Optional[param]))
                 return core_schema.general_plain_validator_function(
                     Gen,
                     metadata=metadata,
@@ -2408,6 +2390,7 @@ def test_advanced_generic_schema():
         def __pydantic_modify_json_schema__(cls, field_schema):
             the_type = field_schema.pop('anyOf', [{'type': 'string'}])[0]
             field_schema.update(title='Gen title', anyOf=[the_type, {'type': 'array', 'items': the_type}])
+            return field_schema
 
     class GenTwoParams(Generic[T, K]):
         def __init__(self, x: str, y: Any):
@@ -2427,11 +2410,7 @@ def test_advanced_generic_schema():
             cls, source: Any, gen_schema: GenerateSchema, **_kwargs: Any
         ) -> core_schema.PlainValidatorFunctionSchema:
             if hasattr(source, '__args__'):
-                metadata = build_metadata_dict(
-                    js_metadata=JsonSchemaMetadata(
-                        core_schema_override=gen_schema.generate_schema(Tuple[source.__args__])
-                    )
-                )
+                metadata = build_metadata_dict(js_cs_override=gen_schema.generate_schema(Tuple[source.__args__]))
                 return core_schema.general_plain_validator_function(
                     GenTwoParams,
                     metadata=metadata,
@@ -2442,6 +2421,7 @@ def test_advanced_generic_schema():
             field_schema.pop('minItems')
             field_schema.pop('maxItems')
             field_schema.update(examples='examples')
+            return field_schema
 
     class CustomType(Enum):
         A = 'a'
@@ -2450,6 +2430,7 @@ def test_advanced_generic_schema():
         @classmethod
         def __pydantic_modify_json_schema__(cls, field_schema):
             field_schema.update(title='CustomType title', type='string')
+            return field_schema
 
     class Model(BaseModel):
         data0: Gen
@@ -2505,7 +2486,6 @@ def test_advanced_generic_schema():
         '$defs': {
             'CustomType': {
                 'title': 'CustomType title',
-                'description': 'An enumeration.',
                 'enum': ['a', 'b'],
                 'type': 'string',
             }
@@ -2633,6 +2613,7 @@ def test_schema_with_field_parameter():
             alphabet = field.json_schema_extra['alphabet']
             field_schema['examples'] = [c * 3 for c in alphabet]
             field_schema['title'] = field.title.lower()
+            return field_schema
 
     class MyModel(BaseModel):
         value: RestrictedAlphabetStr = Field(title='RESTRICTED_ALPHABET', json_schema_extra={'alphabet': 'ABC'})
@@ -2654,6 +2635,7 @@ def test_modify_schema_dict_keys() -> None:
         @classmethod
         def __pydantic_modify_json_schema__(cls, schema):
             schema['test'] = 'passed'
+            return schema
 
     class MyModel(BaseModel):
         my_field: Dict[str, MyType]

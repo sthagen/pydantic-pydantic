@@ -9,6 +9,7 @@ import re
 import sys
 import typing
 import warnings
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, ForwardRef, Iterable, Mapping, TypeVar, Union
 
 from annotated_types import BaseMetadata, GroupedMetadata
@@ -17,7 +18,7 @@ from typing_extensions import Annotated, Literal, TypedDict, get_args, get_origi
 
 from ..errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation, PydanticUserError
 from ..fields import FieldInfo
-from ..json_schema import JsonSchemaMetadata, JsonSchemaValue
+from ..json_schema import JsonSchemaValue, update_json_schema
 from . import _discriminated_union, _typing_extra
 from ._core_metadata import CoreMetadataHandler, build_metadata_dict
 from ._core_utils import (
@@ -30,9 +31,10 @@ from ._core_utils import (
 from ._decorators import (
     Decorator,
     DecoratorInfos,
+    FieldSerializerDecoratorInfo,
     FieldValidatorDecoratorInfo,
+    ModelSerializerDecoratorInfo,
     RootValidatorDecoratorInfo,
-    SerializerDecoratorInfo,
     ValidatorDecoratorInfo,
 )
 from ._fields import PydanticGeneralMetadata, PydanticMetadata, Undefined, collect_fields, get_type_hints_infer_globalns
@@ -48,12 +50,12 @@ __all__ = 'dataclass_schema', 'GenerateSchema', 'generate_config'
 
 _SUPPORTS_TYPEDDICT = sys.version_info >= (3, 11)
 
-FieldDecoratorInfo = Union[ValidatorDecoratorInfo, FieldValidatorDecoratorInfo, SerializerDecoratorInfo]
+FieldDecoratorInfo = Union[ValidatorDecoratorInfo, FieldValidatorDecoratorInfo, FieldSerializerDecoratorInfo]
 FieldDecoratorInfoType = TypeVar('FieldDecoratorInfoType', bound=FieldDecoratorInfo)
 AnyFieldDecorator = Union[
     Decorator[ValidatorDecoratorInfo],
     Decorator[FieldValidatorDecoratorInfo],
-    Decorator[SerializerDecoratorInfo],
+    Decorator[FieldSerializerDecoratorInfo],
 ]
 
 
@@ -71,7 +73,7 @@ def check_validator_fields_against_field_name(
     return False
 
 
-def check_validator_fields_exist(decorators: Iterable[AnyFieldDecorator], fields: Iterable[str]) -> None:
+def check_decorator_fields_exist(decorators: Iterable[AnyFieldDecorator], fields: Iterable[str]) -> None:
     fields = set(fields)
     for dec in decorators:
         if isinstance(dec.info, ValidatorDecoratorInfo) and dec.info.fields == ('*',):
@@ -139,7 +141,8 @@ def dataclass_schema(
     has_post_init = hasattr(cls, '__post_init__')
     args_schema = core_schema.dataclass_args_schema(cls.__name__, args, collect_init_only=has_post_init)
     inner_schema = apply_validators(args_schema, decorators.root_validator.values())
-    return core_schema.dataclass_schema(cls, inner_schema, post_init=has_post_init, ref=ref)
+    dc_schema = core_schema.dataclass_schema(cls, inner_schema, post_init=has_post_init, ref=ref)
+    return apply_model_serializers(dc_schema, decorators.model_serializer.values())
 
 
 def generate_config(config: ConfigDict, cls: type[Any]) -> core_schema.CoreConfig:
@@ -160,6 +163,8 @@ def generate_config(config: ConfigDict, cls: type[Any]) -> core_schema.CoreConfi
             ser_json_timedelta=config['ser_json_timedelta'],
             ser_json_bytes=config['ser_json_bytes'],
             from_attributes=config['from_attributes'],
+            loc_by_alias=config['loc_by_alias'],
+            revalidate_instances=config['revalidate_instances'],
             validate_default=config['validate_default'],
             str_max_length=config.get('str_max_length'),
             str_min_length=config.get('str_min_length'),
@@ -190,13 +195,13 @@ class GenerateSchema:
 
         schema = remove_unnecessary_invalid_definitions(schema)
 
-        modify_js_function = _get_pydantic_modify_json_schema(obj)
-        if modify_js_function is None:
+        js_modify_function = _get_pydantic_modify_json_schema(obj)
+        if js_modify_function is None:
             # Need to do this to handle custom generics:
             if hasattr(obj, '__origin__'):
-                modify_js_function = _get_pydantic_modify_json_schema(obj.__origin__)
+                js_modify_function = _get_pydantic_modify_json_schema(obj.__origin__)
 
-        CoreMetadataHandler(schema).combine_modify_js_functions(modify_js_function)
+        CoreMetadataHandler(schema).compose_js_modify_functions(js_modify_function)
 
         if 'ref' in schema:
             # definitions and definition-ref schemas don't have 'ref', causing the type error ignored on the next line
@@ -217,12 +222,16 @@ class GenerateSchema:
         self.recursion_cache[model_ref] = core_schema.definition_reference_schema(model_ref)
         fields = cls.model_fields
         decorators = cls.__pydantic_decorators__
-        check_validator_fields_exist(
-            [*decorators.field_validator.values(), *decorators.serializer.values(), *decorators.validator.values()],
+        check_decorator_fields_exist(
+            chain(
+                decorators.field_validator.values(),
+                decorators.field_serializer.values(),
+                decorators.validator.values(),
+            ),
             fields.keys(),
         )
         # TODO: we need to do something similar to this for pydantic dataclasses
-        #   This should be straightfoward once we expose the pydantic config on the dataclass;
+        #   This should be straight forward once we expose the pydantic config on the dataclass;
         #   I have done this in my PR for dataclasses JSON schema
         self._arbitrary_types_stack.append(cls.model_config['arbitrary_types_allowed'])
         try:
@@ -239,16 +248,16 @@ class GenerateSchema:
 
         core_config = generate_config(cls.model_config, cls)
         model_post_init = '__pydantic_post_init__' if hasattr(cls, '__pydantic_post_init__') else None
-        js_metadata = cls.model_json_schema_metadata()
 
-        return core_schema.model_schema(
+        model_schema = core_schema.model_schema(
             cls,
             inner_schema,
             ref=model_ref,
             config=core_config,
             post_init=model_post_init,
-            metadata=build_metadata_dict(js_metadata=js_metadata),
+            metadata=build_metadata_dict(js_modify_function=cls.model_modify_json_schema),
         )
+        return apply_model_serializers(model_schema, decorators.model_serializer.values())
 
     def _generate_schema_from_property(self, obj: Any, source: Any) -> core_schema.CoreSchema | None:
         """
@@ -511,14 +520,17 @@ class GenerateSchema:
         if not field_info.is_required():
             schema = wrap_default(field_info, schema)
 
-        schema = apply_serializers(schema, filter_field_decorator_info_by_field(decorators.serializer.values(), name))
-        misc = JsonSchemaMetadata(
-            title=field_info.title,
-            description=field_info.description,
-            examples=field_info.examples,
-            extra_updates=field_info.json_schema_extra,
+        schema = apply_field_serializers(
+            schema, filter_field_decorator_info_by_field(decorators.field_serializer.values(), name)
         )
-        metadata = build_metadata_dict(js_metadata=misc)
+        json_schema_updates = {
+            'title': field_info.title,
+            'description': field_info.description,
+            'examples': field_info.examples,
+        }
+        json_schema_updates = {k: v for k, v in json_schema_updates.items() if v is not None}
+        json_schema_updates.update(field_info.json_schema_extra or {})
+        metadata = build_metadata_dict(js_modify_function=lambda s: update_json_schema(s, json_schema_updates))
         return _common_field(
             schema,
             serialization_exclude=True if field_info.exclude else None,
@@ -543,7 +555,7 @@ class GenerateSchema:
         if len(choices) == 1:
             s = choices[0]
         else:
-            s = core_schema.union_schema(*choices)
+            s = core_schema.union_schema(choices)
 
         if nullable:
             s = core_schema.nullable_schema(s)
@@ -563,7 +575,7 @@ class GenerateSchema:
         """
         expected = _typing_extra.all_literal_values(literal_type)
         assert expected, f'literal "expected" cannot be empty, obj={literal_type}'
-        return core_schema.literal_schema(*expected)
+        return core_schema.literal_schema(expected)
 
     def _typed_dict_schema(
         self, typed_dict_cls: Any, origin: Any
@@ -625,7 +637,9 @@ class GenerateSchema:
             fields,
             extra_behavior='forbid',
             ref=typed_dict_ref,
-            metadata=build_metadata_dict(js_metadata=JsonSchemaMetadata(title=typed_dict_cls.__name__)),
+            metadata=build_metadata_dict(
+                js_modify_function=lambda s: update_json_schema(s, {'title': typed_dict_cls.__name__}),
+            ),
         )
 
     def _namedtuple_schema(self, namedtuple_cls: Any) -> core_schema.CallSchema:
@@ -645,7 +659,7 @@ class GenerateSchema:
                 self._generate_parameter_schema(field_name, annotation)
                 for field_name, annotation in annotations.items()
             ],
-            metadata=build_metadata_dict(js_metadata=JsonSchemaMetadata(source_class=namedtuple_cls)),
+            metadata=build_metadata_dict(js_prefer_positional_arguments=True),
         )
         return core_schema.call_schema(arguments_schema, namedtuple_cls)
 
@@ -707,7 +721,7 @@ class GenerateSchema:
                 return core_schema.tuple_variable_schema()
             else:
                 # special case for `tuple[()]` which means `tuple[]` - an empty tuple
-                return core_schema.tuple_positional_schema()
+                return core_schema.tuple_positional_schema([])
         elif params[-1] is Ellipsis:
             if len(params) == 2:
                 sv = core_schema.tuple_variable_schema(self.generate_schema(params[0]))
@@ -716,13 +730,13 @@ class GenerateSchema:
             # not sure this case is valid in python, but may as well support it here since pydantic-core does
             *items_schema, extra_schema = params
             return core_schema.tuple_positional_schema(
-                *[self.generate_schema(p) for p in items_schema], extra_schema=self.generate_schema(extra_schema)
+                [self.generate_schema(p) for p in items_schema], extra_schema=self.generate_schema(extra_schema)
             )
         elif len(params) == 1 and params[0] == ():
             # special case for `Tuple[()]` which means `Tuple[]` - an empty tuple
-            return core_schema.tuple_positional_schema()
+            return core_schema.tuple_positional_schema([])
         else:
-            return core_schema.tuple_positional_schema(*[self.generate_schema(p) for p in params])
+            return core_schema.tuple_positional_schema([self.generate_schema(p) for p in params])
 
     def _dict_schema(self, dict_type: Any) -> core_schema.DictSchema:
         """
@@ -813,7 +827,7 @@ class GenerateSchema:
                 return core_schema.is_subclass_schema(type_param.__bound__)
             elif type_param.__constraints__:
                 return core_schema.union_schema(
-                    *[self.generate_schema(typing.Type[c]) for c in type_param.__constraints__]
+                    [self.generate_schema(typing.Type[c]) for c in type_param.__constraints__]
                 )
             else:
                 return self._type_schema()
@@ -832,11 +846,13 @@ class GenerateSchema:
             from ._validators import sequence_validator
 
             return core_schema.chain_schema(
-                core_schema.is_instance_schema(typing.Sequence, cls_repr='Sequence'),
-                core_schema.general_wrap_validator_function(
-                    sequence_validator,
-                    core_schema.list_schema(self.generate_schema(item_type), allow_any_iter=True),
-                ),
+                [
+                    core_schema.is_instance_schema(typing.Sequence, cls_repr='Sequence'),
+                    core_schema.general_wrap_validator_function(
+                        sequence_validator,
+                        core_schema.list_schema(self.generate_schema(item_type), allow_any_iter=True),
+                    ),
+                ]
             )
 
     def _iterable_schema(self, type_: Any) -> core_schema.GeneratorSchema:
@@ -852,7 +868,7 @@ class GenerateSchema:
     def _pattern_schema(self, pattern_type: Any) -> core_schema.CoreSchema:
         from . import _serializers, _validators
 
-        metadata = build_metadata_dict(js_metadata={'source_class': pattern_type, 'type': 'string', 'format': 'regex'})
+        metadata = build_metadata_dict(js_override={'type': 'string', 'format': 'regex'})
         ser = core_schema.general_plain_serializer_function_ser_schema(
             _serializers.pattern_serializer, json_return_type='str'
         )
@@ -975,16 +991,15 @@ def _validators_require_validate_default(validators: Iterable[Decorator[Validato
     return False
 
 
-def apply_serializers(
-    schema: core_schema.CoreSchema, serializers: list[Decorator[SerializerDecoratorInfo]]
+def apply_field_serializers(
+    schema: core_schema.CoreSchema, serializers: list[Decorator[FieldSerializerDecoratorInfo]]
 ) -> core_schema.CoreSchema:
     """
-    Apply serializers to a schema.
+    Apply field serializers to a schema.
     """
     if serializers:
         # use the last serializer to make it easy to override a serializer set on a parent model
         serializer = serializers[-1]
-        function = serializer.func
         if serializer.info.mode == 'wrap':
             sf = (
                 core_schema.field_wrap_serializer_function_ser_schema
@@ -992,8 +1007,7 @@ def apply_serializers(
                 else core_schema.general_wrap_serializer_function_ser_schema
             )
             schema['serialization'] = sf(  # type: ignore[operator]
-                function,
-                schema.copy(),
+                serializer.func,
                 json_return_type=serializer.info.json_return_type,
                 when_used=serializer.info.when_used,
             )
@@ -1005,10 +1019,34 @@ def apply_serializers(
                 else core_schema.general_plain_serializer_function_ser_schema
             )
             schema['serialization'] = sf(  # type: ignore[operator]
-                function,
+                serializer.func,
                 json_return_type=serializer.info.json_return_type,
                 when_used=serializer.info.when_used,
             )
+    return schema
+
+
+def apply_model_serializers(
+    schema: core_schema.CoreSchema, serializers: Iterable[Decorator[ModelSerializerDecoratorInfo]]
+) -> core_schema.CoreSchema:
+    """
+    Apply model serializers to a schema.
+    """
+    if serializers:
+        serializer = list(serializers)[-1]
+
+        if serializer.info.mode == 'wrap':
+            ser_schema: core_schema.SerSchema = core_schema.general_wrap_serializer_function_ser_schema(
+                serializer.func,
+                json_return_type=serializer.info.json_return_type,
+            )
+        else:
+            # plain
+            ser_schema = core_schema.general_plain_serializer_function_ser_schema(
+                serializer.func,
+                json_return_type=serializer.info.json_return_type,
+            )
+        schema['serialization'] = ser_schema
     return schema
 
 
@@ -1022,8 +1060,8 @@ def apply_annotations(
     for metadata in annotations:
         schema = apply_single_annotation(schema, metadata, definitions)
 
-        metadata_modify_js_function = _get_pydantic_modify_json_schema(metadata)
-        handler.combine_modify_js_functions(metadata_modify_js_function)
+        metadata_js_modify_function = _get_pydantic_modify_json_schema(metadata)
+        handler.compose_js_modify_functions(metadata_js_modify_function)
 
     return schema
 
@@ -1072,7 +1110,7 @@ def apply_single_annotation(  # noqa C901
         return schema
 
     handler = CoreMetadataHandler(schema)
-    update_schema_function = handler.update_cs_function
+    update_schema_function = handler.metadata.get('pydantic_cs_update_function')
     if update_schema_function is not None:
         new_schema = update_schema_function(schema, **metadata_dict)
         if new_schema is not None:
@@ -1116,17 +1154,17 @@ def get_first_arg(type_: Any) -> Any:
         return Any
 
 
-def _get_pydantic_modify_json_schema(obj: Any) -> typing.Callable[[JsonSchemaValue], None] | None:
-    modify_js_function = getattr(obj, '__pydantic_modify_json_schema__', None)
+def _get_pydantic_modify_json_schema(obj: Any) -> typing.Callable[[JsonSchemaValue], JsonSchemaValue] | None:
+    js_modify_function = getattr(obj, '__pydantic_modify_json_schema__', None)
 
-    if modify_js_function is None and hasattr(obj, '__modify_schema__'):
+    if js_modify_function is None and hasattr(obj, '__modify_schema__'):
         warnings.warn(
             'The __modify_schema__ method is deprecated, use __pydantic_modify_json_schema__ instead',
             DeprecationWarning,
         )
         return obj.__modify_schema__
 
-    return modify_js_function
+    return js_modify_function
 
 
 class _CommonField(TypedDict):
