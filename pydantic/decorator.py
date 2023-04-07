@@ -60,7 +60,7 @@ V_DUPLICATE_KWARGS = 'v__duplicate_kwargs'
 
 
 class ValidatedFunction:
-    def __init__(self, function: 'AnyCallableT', config: 'ConfigType'):
+    def __init__(self, function: 'AnyCallable', config: 'ConfigType'):
         from inspect import Parameter, signature
 
         parameters: Mapping[str, Parameter] = signature(function).parameters
@@ -68,12 +68,13 @@ class ValidatedFunction:
         if parameters.keys() & {ALT_V_ARGS, ALT_V_KWARGS, V_POSITIONAL_ONLY_NAME, V_DUPLICATE_KWARGS}:
             raise PydanticUserError(
                 f'"{ALT_V_ARGS}", "{ALT_V_KWARGS}", "{V_POSITIONAL_ONLY_NAME}" and "{V_DUPLICATE_KWARGS}" '
-                f'are not permitted as argument names when using the "{validate_arguments.__name__}" decorator'
+                f'are not permitted as argument names when using the "{validate_arguments.__name__}" decorator',
+                code=None,
             )
 
         self.raw_function = function
         self.arg_mapping: Dict[int, str] = {}
-        self.positional_only_args = set()
+        self.positional_only_args: set[str] = set()
         self.v_args_name = 'args'
         self.v_kwargs_name = 'kwargs'
 
@@ -179,7 +180,7 @@ class ValidatedFunction:
         return values
 
     def execute(self, m: BaseModel) -> Any:
-        d = {k: v for k, v in m.__dict__.items() if k in m.__fields_set__ or m.model_fields[k].default_factory}
+        d = {k: v for k, v in m.__dict__.items() if k in m.__pydantic_fields_set__ or m.model_fields[k].default_factory}
         var_kwargs = d.pop(self.v_kwargs_name, {})
 
         if self.v_args_name in d:
@@ -215,13 +216,14 @@ class ValidatedFunction:
         if 'alias_generator' in config_dict:
             raise PydanticUserError(
                 'Setting the "alias_generator" property on custom Config for '
-                '@validate_arguments is not yet supported, please remove.'
+                '@validate_arguments is not yet supported, please remove.',
+                code=None,
             )
         if 'extra' not in config_dict:
             config_dict['extra'] = Extra.forbid
 
         class DecoratorBaseModel(BaseModel):
-            @field_validator(self.v_args_name, check_fields=False, allow_reuse=True)
+            @field_validator(self.v_args_name, check_fields=False)
             @classmethod
             def check_args(cls, v: Optional[List[Any]]) -> Optional[List[Any]]:
                 if takes_args or v is None:
@@ -229,7 +231,7 @@ class ValidatedFunction:
 
                 raise TypeError(f'{pos_args} positional arguments expected but {pos_args + len(v)} given')
 
-            @field_validator(self.v_kwargs_name, check_fields=False, allow_reuse=True)
+            @field_validator(self.v_kwargs_name, check_fields=False)
             @classmethod
             def check_kwargs(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
                 if takes_kwargs or v is None:
@@ -239,7 +241,7 @@ class ValidatedFunction:
                 keys = ', '.join(map(repr, v.keys()))
                 raise TypeError(f'unexpected keyword argument{plural}: {keys}')
 
-            @field_validator(V_POSITIONAL_ONLY_NAME, check_fields=False, allow_reuse=True)
+            @field_validator(V_POSITIONAL_ONLY_NAME, check_fields=False)
             @classmethod
             def check_positional_only(cls, v: Optional[List[str]]) -> None:
                 if v is None:
@@ -249,7 +251,7 @@ class ValidatedFunction:
                 keys = ', '.join(map(repr, v))
                 raise TypeError(f'positional-only argument{plural} passed as keyword argument{plural}: {keys}')
 
-            @field_validator(V_DUPLICATE_KWARGS, check_fields=False, allow_reuse=True)
+            @field_validator(V_DUPLICATE_KWARGS, check_fields=False)
             @classmethod
             def check_duplicate_kwargs(cls, v: Optional[List[str]]) -> None:
                 if v is None:

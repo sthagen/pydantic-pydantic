@@ -9,7 +9,7 @@ from typing import Any, Dict, FrozenSet, Generic, List, Optional, Sequence, Set,
 import pytest
 from dirty_equals import HasRepr, IsStr
 from pydantic_core import core_schema
-from typing_extensions import get_args
+from typing_extensions import Annotated, get_args
 
 from pydantic import (
     AnalyzedType,
@@ -21,7 +21,6 @@ from pydantic import (
     constr,
     errors,
 )
-from pydantic._internal._fields import PydanticGeneralMetadata
 from pydantic.config import get_config
 from pydantic.decorators import field_validator
 from pydantic.fields import Field
@@ -530,7 +529,7 @@ def test_include_exclude_unset():
 
     m = Model(a=1, b=2, e=5, f=7)
     assert m.model_dump() == {'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 7}
-    assert m.__fields_set__ == {'a', 'b', 'e', 'f'}
+    assert m.model_fields_set == {'a', 'b', 'e', 'f'}
     assert m.model_dump(exclude_unset=True) == {'a': 1, 'b': 2, 'e': 5, 'f': 7}
 
     assert m.model_dump(include={'a'}, exclude_unset=True) == {'a': 1}
@@ -554,7 +553,7 @@ def test_include_exclude_defaults():
 
     m = Model(a=1, b=2, e=5, f=7)
     assert m.model_dump() == {'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 7}
-    assert m.__fields_set__ == {'a', 'b', 'e', 'f'}
+    assert m.model_fields_set == {'a', 'b', 'e', 'f'}
     assert m.model_dump(exclude_defaults=True) == {'a': 1, 'b': 2, 'f': 7}
 
     assert m.model_dump(include={'a'}, exclude_defaults=True) == {'a': 1}
@@ -874,12 +873,12 @@ def test_field_set_ignore_extra():
 
     m = Model(a=1, b=2)
     assert m.model_dump() == {'a': 1, 'b': 2, 'c': 3}
-    assert m.__fields_set__ == {'a', 'b'}
+    assert m.model_fields_set == {'a', 'b'}
     assert m.model_dump(exclude_unset=True) == {'a': 1, 'b': 2}
 
     m2 = Model(a=1, b=2, d=4)
     assert m2.model_dump() == {'a': 1, 'b': 2, 'c': 3}
-    assert m2.__fields_set__ == {'a', 'b'}
+    assert m2.model_fields_set == {'a', 'b'}
     assert m2.model_dump(exclude_unset=True) == {'a': 1, 'b': 2}
 
 
@@ -892,12 +891,12 @@ def test_field_set_allow_extra():
 
     m = Model(a=1, b=2)
     assert m.model_dump() == {'a': 1, 'b': 2, 'c': 3}
-    assert m.__fields_set__ == {'a', 'b'}
+    assert m.model_fields_set == {'a', 'b'}
     assert m.model_dump(exclude_unset=True) == {'a': 1, 'b': 2}
 
     m2 = Model(a=1, b=2, d=4)
     assert m2.model_dump() == {'a': 1, 'b': 2, 'c': 3, 'd': 4}
-    assert m2.__fields_set__ == {'a', 'b', 'd'}
+    assert m2.model_fields_set == {'a', 'b', 'd'}
     assert m2.model_dump(exclude_unset=True) == {'a': 1, 'b': 2, 'd': 4}
 
 
@@ -1181,9 +1180,9 @@ def test_unable_to_infer():
     with pytest.raises(
         errors.PydanticUserError,
         match=re.escape(
-            "A non-annotated attribute was detected: `x = None`. All model fields require a type annotation; "
-            "if 'x' is not meant to be a field, you may be able to resolve this error by annotating it as a "
-            "ClassVar or updating model_config[\"ignored_types\"]"
+            'A non-annotated attribute was detected: `x = None`. All model fields require a type annotation; '
+            'if `x` is not meant to be a field, you may be able to resolve this error by annotating it as a '
+            '`ClassVar` or updating `model_config[\"ignored_types\"]`'
         ),
     ):
 
@@ -2140,7 +2139,6 @@ def test_iter_coverage():
         assert list(MyModel()._iter(by_alias=True)) == [('x', 1), ('y', 'a')]
 
 
-@pytest.mark.xfail(reason='field frozen')
 def test_frozen_config_and_field():
     class Foo(BaseModel):
         model_config = ConfigDict(frozen=False, validate_assignment=True)
@@ -2155,13 +2153,20 @@ def test_frozen_config_and_field():
     class Bar(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         a: str = Field(..., frozen=True)
+        c: Annotated[str, Field(frozen=True)]
 
-    assert PydanticGeneralMetadata(frozen=True) in Bar.model_fields['a'].metadata
+    assert Bar.model_fields['a'].frozen
 
-    b = Bar(a='x')
-    with pytest.raises(TypeError):
+    b = Bar(a='x', c='z')
+    with pytest.raises(ValidationError) as exc_info:
         b.a = 'y'
-    assert b.model_dump() == {'a': 'x'}
+    assert exc_info.value.errors() == [{'input': 'y', 'loc': ('a',), 'msg': 'Field is frozen', 'type': 'frozen_field'}]
+
+    with pytest.raises(ValidationError) as exc_info:
+        b.c = 'y'
+    assert exc_info.value.errors() == [{'input': 'y', 'loc': ('c',), 'msg': 'Field is frozen', 'type': 'frozen_field'}]
+
+    assert b.model_dump() == {'a': 'x', 'c': 'z'}
 
 
 def test_arbitrary_types_allowed_custom_eq():

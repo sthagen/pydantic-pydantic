@@ -24,7 +24,7 @@ from typing import (
 from uuid import UUID, uuid4
 
 import pytest
-from typing_extensions import Final, Literal
+from typing_extensions import Annotated, Final, Literal
 
 from pydantic import (
     BaseModel,
@@ -32,6 +32,7 @@ from pydantic import (
     Extra,
     Field,
     PrivateAttr,
+    PydanticUndefinedAnnotation,
     PydanticUserError,
     SecretStr,
     ValidationError,
@@ -749,13 +750,13 @@ def test_fields_set():
         b: int = 2
 
     m = MyModel(a=5)
-    assert m.__fields_set__ == {'a'}
+    assert m.model_fields_set == {'a'}
 
     m.b = 2
-    assert m.__fields_set__ == {'a', 'b'}
+    assert m.model_fields_set == {'a', 'b'}
 
     m = MyModel(a=5, b=2)
-    assert m.__fields_set__ == {'a', 'b'}
+    assert m.model_fields_set == {'a', 'b'}
 
 
 def test_exclude_unset_dict():
@@ -1314,9 +1315,9 @@ def test_untyped_fields_warning():
     with pytest.raises(
         PydanticUserError,
         match=re.escape(
-            "A non-annotated attribute was detected: `x = 1`. All model fields require a type annotation; "
-            "if 'x' is not meant to be a field, you may be able to resolve this error by annotating it "
-            "as a ClassVar or updating model_config[\"ignored_types\"]."
+            'A non-annotated attribute was detected: `x = 1`. All model fields require a type annotation; '
+            'if `x` is not meant to be a field, you may be able to resolve this error by annotating it '
+            'as a `ClassVar` or updating `model_config["ignored_types"]`.'
         ),
     ):
 
@@ -1496,7 +1497,6 @@ def test_base_config_type_hinting():
     get_type_hints(type(M.model_config))
 
 
-@pytest.mark.xfail(reason='frozen field; https://github.com/pydantic/pydantic-core/pull/237')
 def test_frozen_field():
     """assigning a frozen=True field should raise a TypeError"""
 
@@ -1510,8 +1510,9 @@ def test_frozen_field():
     r.val = 101
     assert r.val == 101
     assert r.id == 1
-    with pytest.raises(TypeError, match='"id" has frozen set to True and cannot be assigned'):
+    with pytest.raises(ValidationError) as exc_info:
         r.id = 2
+    assert exc_info.value.errors() == [{'input': 2, 'loc': ('id',), 'msg': 'Field is frozen', 'type': 'frozen_field'}]
 
 
 def test_repr_field():
@@ -1719,7 +1720,6 @@ def test_new_union_origin():
     # }
 
 
-@pytest.mark.xfail(reason='implement final')
 @pytest.mark.parametrize(
     'ann',
     [Final, Final[int]],
@@ -1737,15 +1737,12 @@ def test_final_field_decl_without_default_val(ann, value):
         if value is not None:
             a = value
 
-    Model.model_rebuild(ann=ann)
-
     assert 'a' not in Model.__class_vars__
     assert 'a' in Model.model_fields
 
     assert Model.model_fields['a'].final
 
 
-@pytest.mark.xfail(reason='waiting for https://github.com/pydantic/pydantic-core/pull/237')
 @pytest.mark.parametrize(
     'ann',
     [Final, Final[int]],
@@ -1755,27 +1752,23 @@ def test_final_field_decl_with_default_val(ann):
     class Model(BaseModel):
         a: ann = 10
 
-    Model.model_rebuild(ann=ann)
-
     assert 'a' in Model.__class_vars__
     assert 'a' not in Model.model_fields
 
 
-@pytest.mark.xfail(reason='waiting for https://github.com/pydantic/pydantic-core/pull/237')
 def test_final_field_reassignment():
     class Model(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+
         a: Final[int]
 
     obj = Model(a=10)
 
-    with pytest.raises(
-        TypeError,
-        match=r'^"Model" object "a" field is final and does not support reassignment$',
-    ):
+    with pytest.raises(ValidationError) as exc_info:
         obj.a = 20
+    assert exc_info.value.errors() == [{'input': 20, 'loc': ('a',), 'msg': 'Field is frozen', 'type': 'frozen_field'}]
 
 
-@pytest.mark.xfail(reason='waiting for https://github.com/pydantic/pydantic-core/pull/237')
 def test_field_by_default_is_not_final():
     class Model(BaseModel):
         a: int
@@ -1783,29 +1776,104 @@ def test_field_by_default_is_not_final():
     assert not Model.model_fields['a'].final
 
 
+def test_annotated_final():
+    class Model(BaseModel):
+        a: Annotated[Final[int], Field(title='abc')]
+
+    assert Model.model_fields['a'].final
+    assert Model.model_fields['a'].title == 'abc'
+
+    class Model2(BaseModel):
+        a: Final[Annotated[int, Field(title='def')]]
+
+    assert Model2.model_fields['a'].final
+    assert Model2.model_fields['a'].title == 'def'
+
+
 def test_post_init():
     calls = []
 
-    class SubModel(BaseModel):
+    class InnerModel(BaseModel):
         a: int
         b: int
 
-        def model_post_init(self, _context) -> None:
+        def model_post_init(self, __context) -> None:
+            super().model_post_init(__context)  # this is included just to show it doesn't error
             assert self.model_dump() == {'a': 3, 'b': 4}
-            calls.append('submodel_post_init')
+            calls.append('inner_model_post_init')
 
     class Model(BaseModel):
         c: int
         d: int
-        sub: SubModel
+        sub: InnerModel
 
-        def model_post_init(self, _context) -> None:
+        def model_post_init(self, __context) -> None:
             assert self.model_dump() == {'c': 1, 'd': 2, 'sub': {'a': 3, 'b': 4}}
             calls.append('model_post_init')
 
     m = Model(c=1, d='2', sub={'a': 3, 'b': '4'})
+    assert calls == ['inner_model_post_init', 'model_post_init']
     assert m.model_dump() == {'c': 1, 'd': 2, 'sub': {'a': 3, 'b': 4}}
-    assert calls == ['submodel_post_init', 'model_post_init']
+
+    class SubModel(Model):
+        def model_post_init(self, __context) -> None:
+            assert self.model_dump() == {'c': 1, 'd': 2, 'sub': {'a': 3, 'b': 4}}
+            super().model_post_init(__context)
+            calls.append('submodel_post_init')
+
+    calls.clear()
+    m = SubModel(c=1, d='2', sub={'a': 3, 'b': '4'})
+    assert calls == ['inner_model_post_init', 'model_post_init', 'submodel_post_init']
+    assert m.model_dump() == {'c': 1, 'd': 2, 'sub': {'a': 3, 'b': 4}}
+
+
+@pytest.mark.parametrize('include_private_attribute', [True, False])
+def test_post_init_call_signatures(include_private_attribute):
+    calls = []
+
+    class Model(BaseModel):
+        a: int
+        b: int
+        if include_private_attribute:
+            _x: int = PrivateAttr(1)
+
+        def model_post_init(self, *args, **kwargs) -> None:
+            calls.append((args, kwargs))
+
+    Model(a=1, b=2)
+    assert calls == [((None,), {})]
+    Model.model_construct(a=3, b=4)
+    assert calls == [((None,), {}), ((None,), {})]
+
+
+def test_post_init_not_called_without_override():
+    calls = []
+
+    def monkey_patched_model_post_init(cls, __context):
+        calls.append('BaseModel.model_post_init')
+
+    original_base_model_post_init = BaseModel.model_post_init
+    try:
+        BaseModel.model_post_init = monkey_patched_model_post_init
+
+        class WithoutOverrideModel(BaseModel):
+            pass
+
+        WithoutOverrideModel()
+        WithoutOverrideModel.model_construct()
+        assert calls == []
+
+        class WithOverrideModel(BaseModel):
+            def model_post_init(self, __context: Any) -> None:
+                calls.append('WithOverrideModel.model_post_init')
+
+        WithOverrideModel()
+        assert calls == ['WithOverrideModel.model_post_init']
+        WithOverrideModel.model_construct()
+        assert calls == ['WithOverrideModel.model_post_init', 'WithOverrideModel.model_post_init']
+
+    finally:
+        BaseModel.model_post_init = original_base_model_post_init
 
 
 def test_extra_args_to_field_type_error():
@@ -1831,6 +1899,26 @@ def test_deeper_recursive_model():
 
     m = A(b=B(c=C(a=None)))
     assert m.model_dump() == {'b': {'c': {'a': None}}}
+
+
+def test_model_rebuild_localns():
+    class A(BaseModel, undefined_types_warning=False):
+        x: int
+
+    class B(BaseModel, undefined_types_warning=False):
+        a: 'Model'  # noqa F821
+
+    B.model_rebuild(_types_namespace={'Model': A})
+
+    m = B(a={'x': 1})
+    assert m.model_dump() == {'a': {'x': 1}}
+    assert isinstance(m.a, A)
+
+    class C(BaseModel, undefined_types_warning=False):
+        a: 'Model'  # noqa F821
+
+    with pytest.raises(PydanticUndefinedAnnotation, match="name 'Model' is not defined"):
+        C.model_rebuild(_types_namespace={'A': A})
 
 
 @pytest.fixture(scope='session', name='InnerEqualityModel')
@@ -1889,7 +1977,7 @@ def test_model_equality_dump(EqualityModel, InnerEqualityModel):
 def test_model_equality_fields_set(InnerEqualityModel):
     m1 = InnerEqualityModel(iw=0)
     m2 = InnerEqualityModel(iw=0, ix=0)
-    assert m1.__fields_set__ != m2.__fields_set__
+    assert m1.model_fields_set != m2.model_fields_set
     assert m1 == m2
 
 

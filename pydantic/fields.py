@@ -43,6 +43,8 @@ class FieldInfo(_repr.Representation):
         'init_var',
         'kw_only',
         'validate_default',
+        'frozen',
+        'final',
     )
 
     # used to convert kwargs to metadata/constraints,
@@ -60,7 +62,6 @@ class FieldInfo(_repr.Representation):
         'allow_inf_nan': None,
         'min_items': None,
         'max_items': None,
-        'frozen': None,
         'max_digits': None,
         'decimal_places': None,
     }
@@ -95,6 +96,8 @@ class FieldInfo(_repr.Representation):
         self.init_var = kwargs.get('init_var', None)
         self.kw_only = kwargs.get('kw_only', None)
         self.validate_default = kwargs.get('validate_default', None)
+        self.frozen = kwargs.get('frozen', None)
+        self.final = kwargs.get('final', None)
 
     @classmethod
     def from_field(cls, default: Any = Undefined, **kwargs: Any) -> FieldInfo:
@@ -124,16 +127,25 @@ class FieldInfo(_repr.Representation):
         >>>     foo: typing.Annotated[int, annotated_types.Gt(42)]
         >>>     bar: typing.Annotated[int, Field(gt=42)]
         """
+        final = False
+        if _typing_extra.is_finalvar(annotation):
+            final = True
+            if annotation is not typing_extensions.Final:
+                annotation = typing_extensions.get_args(annotation)[0]
+
         if _typing_extra.is_annotated(annotation):
             first_arg, *extra_args = typing_extensions.get_args(annotation)
+            if _typing_extra.is_finalvar(first_arg):
+                final = True
             field_info = cls._find_field_info_arg(extra_args)
             if field_info:
                 new_field_info = copy(field_info)
                 new_field_info.annotation = first_arg
+                new_field_info.final = final
                 new_field_info.metadata += [a for a in extra_args if not isinstance(a, FieldInfo)]
                 return new_field_info
 
-        return cls(annotation=annotation)
+        return cls(annotation=annotation, final=final)
 
     @classmethod
     def from_annotated_attribute(cls, annotation: type[Any], default: Any) -> FieldInfo:
@@ -147,14 +159,22 @@ class FieldInfo(_repr.Representation):
         """
         import dataclasses
 
+        final = False
+        if _typing_extra.is_finalvar(annotation):
+            final = True
+            if annotation is not typing_extensions.Final:
+                annotation = typing_extensions.get_args(annotation)[0]
+
         if isinstance(default, cls):
             default.annotation, annotation_metadata = cls._extract_metadata(annotation)
             default.metadata += annotation_metadata
+            default.final = final
             return default
         elif isinstance(default, dataclasses.Field):
             pydantic_field = cls.from_dataclass_field(default)
             pydantic_field.annotation, annotation_metadata = cls._extract_metadata(annotation)
             pydantic_field.metadata += annotation_metadata
+            pydantic_field.final = final
             return pydantic_field
         else:
             if _typing_extra.is_annotated(annotation):
@@ -169,7 +189,7 @@ class FieldInfo(_repr.Representation):
                     new_field_info.metadata += [a for a in extra_args if not isinstance(a, FieldInfo)]
                     return new_field_info
 
-            return cls(annotation=annotation, default=default)
+            return cls(annotation=annotation, default=default, final=final)
 
     @classmethod
     def from_dataclass_field(cls, dc_field: DataclassField[Any]) -> FieldInfo:
@@ -279,6 +299,8 @@ class FieldInfo(_repr.Representation):
                 continue
             elif s == 'repr' and self.repr is True:
                 continue
+            elif s == 'final':
+                continue
             if s == 'default_factory' and self.default_factory is not None:
                 yield 'default_factory', _repr.PlainRepr(_repr.display_as_type(self.default_factory))
             else:
@@ -291,31 +313,31 @@ def Field(
     default: Any = Undefined,
     *,
     default_factory: typing.Callable[[], Any] | None = None,
-    alias: str = None,
+    alias: str | None = None,
     # TODO:
     #  Alternative 1: we could drop alias_priority and tell people to manually override aliases in child classes
     #  Alternative 2: we could add a new argument `override_with_alias_generator=True` equivalent to `alias_priority=1`
-    alias_priority: int = None,
-    title: str = None,
-    description: str = None,
-    examples: list[Any] = None,
+    alias_priority: int | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    examples: list[Any] | None = None,
     exclude: typing.AbstractSet[int | str] | typing.Mapping[int | str, Any] | Any = None,
     include: typing.AbstractSet[int | str] | typing.Mapping[int | str, Any] | Any = None,
-    gt: float = None,
-    ge: float = None,
-    lt: float = None,
-    le: float = None,
-    multiple_of: float = None,
-    allow_inf_nan: bool = None,
-    max_digits: int = None,
-    decimal_places: int = None,
-    min_items: int = None,
-    max_items: int = None,
-    min_length: int = None,
-    max_length: int = None,
-    frozen: bool = None,
-    pattern: str = None,
-    discriminator: str = None,
+    gt: float | None = None,
+    ge: float | None = None,
+    lt: float | None = None,
+    le: float | None = None,
+    multiple_of: float | None = None,
+    allow_inf_nan: bool | None = None,
+    max_digits: int | None = None,
+    decimal_places: int | None = None,
+    min_items: int | None = None,
+    max_items: int | None = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    frozen: bool | None = None,
+    pattern: str | None = None,
+    discriminator: str | None = None,
     repr: bool = True,
     strict: bool | None = None,
     json_schema_extra: dict[str, Any] | None = None,

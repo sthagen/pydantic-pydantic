@@ -12,7 +12,7 @@ def deprecated_from_orm(model_type, obj):
     with pytest.warns(
         DeprecationWarning,
         match=re.escape(
-            'The `from_orm` method is deprecated; set model_config["from_attributes"]=True '
+            'The `from_orm` method is deprecated; set `model_config["from_attributes"]=True` '
             'and use `model_validate` instead.'
         ),
     ):
@@ -379,3 +379,15 @@ def test_parse_raw_pass_fail():
             'input': 'invalid',
         }
     ]
+
+
+def test_fields_set():
+    class Model(BaseModel):
+        x: int
+        y: int = 2
+
+    m = Model(x=1)
+    assert m.model_fields_set == {'x'}
+    match = '^The `__fields_set__` attribute is deprecated, use `model_fields_set` instead.$'
+    with pytest.warns(DeprecationWarning, match=match):
+        assert m.__fields_set__ == {'x'}

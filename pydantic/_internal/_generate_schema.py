@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, ForwardRef, Iterable, Mapping, 
 
 from annotated_types import BaseMetadata, GroupedMetadata
 from pydantic_core import SchemaError, SchemaValidator, core_schema
-from typing_extensions import Annotated, Literal, TypedDict, get_args, get_origin, is_typeddict
+from typing_extensions import Annotated, Final, Literal, TypedDict, get_args, get_origin, is_typeddict
 
 from ..errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation, PydanticUserError
 from ..fields import FieldInfo
@@ -40,6 +40,7 @@ from ._decorators import (
 from ._fields import PydanticGeneralMetadata, PydanticMetadata, Undefined, collect_fields, get_type_hints_infer_globalns
 from ._forward_ref import PydanticForwardRef, PydanticRecursiveRef
 from ._generics import recursively_defined_type_refs, replace_types
+from ._typing_extra import is_finalvar
 
 if TYPE_CHECKING:
     from ..config import ConfigDict
@@ -84,8 +85,9 @@ def check_decorator_fields_exist(decorators: Iterable[AnyFieldDecorator], fields
         for field in dec.info.fields:
             if field not in fields:
                 raise PydanticUserError(
-                    f'Validators defined with incorrect fields: {dec.unwrapped_func.__name__}'
-                    " (use check_fields=False if you're inheriting from the model and intended this)"
+                    f'Validators defined with incorrect fields: {dec.cls_ref}.{dec.cls_var_name}'
+                    " (use check_fields=False if you're inheriting from the model and intended this)",
+                    code='decorator-missing-field',
                 )
 
 
@@ -149,23 +151,23 @@ def generate_config(config: ConfigDict, cls: type[Any]) -> core_schema.CoreConfi
     """
     Create a pydantic-core config from a pydantic config.
     """
-    extra = None if config['extra'] is None else config['extra'].value
+    extra = None if config['extra'] is None else config['extra'].value  # type: ignore
     core_config = core_schema.CoreConfig(  # type: ignore[misc]
         **core_schema.dict_not_none(
-            title=config['title'] or cls.__name__,
+            title=config['title'] or cls.__name__,  # type: ignore
             extra_fields_behavior=extra,
-            allow_inf_nan=config['allow_inf_nan'],
-            populate_by_name=config['populate_by_name'],
-            str_strip_whitespace=config['str_strip_whitespace'],
-            str_to_lower=config['str_to_lower'],
-            str_to_upper=config['str_to_upper'],
-            strict=config['strict'],
-            ser_json_timedelta=config['ser_json_timedelta'],
-            ser_json_bytes=config['ser_json_bytes'],
-            from_attributes=config['from_attributes'],
-            loc_by_alias=config['loc_by_alias'],
-            revalidate_instances=config['revalidate_instances'],
-            validate_default=config['validate_default'],
+            allow_inf_nan=config['allow_inf_nan'],  # type: ignore
+            populate_by_name=config['populate_by_name'],  # type: ignore
+            str_strip_whitespace=config['str_strip_whitespace'],  # type: ignore
+            str_to_lower=config['str_to_lower'],  # type: ignore
+            str_to_upper=config['str_to_upper'],  # type: ignore
+            strict=config['strict'],  # type: ignore
+            ser_json_timedelta=config['ser_json_timedelta'],  # type: ignore
+            ser_json_bytes=config['ser_json_bytes'],  # type: ignore
+            from_attributes=config['from_attributes'],  # type: ignore
+            loc_by_alias=config['loc_by_alias'],  # type: ignore
+            revalidate_instances=config['revalidate_instances'],  # type: ignore
+            validate_default=config['validate_default'],  # type: ignore
             str_max_length=config.get('str_max_length'),
             str_min_length=config.get('str_min_length'),
         )
@@ -214,6 +216,8 @@ class GenerateSchema:
         """
         Generate schema for a pydantic model.
         """
+        from pydantic.main import BaseModel
+
         model_ref = get_type_ref(cls)
         cached_def = self.recursion_cache.get(model_ref)
         if cached_def is not None:
@@ -233,7 +237,7 @@ class GenerateSchema:
         # TODO: we need to do something similar to this for pydantic dataclasses
         #   This should be straight forward once we expose the pydantic config on the dataclass;
         #   I have done this in my PR for dataclasses JSON schema
-        self._arbitrary_types_stack.append(cls.model_config['arbitrary_types_allowed'])
+        self._arbitrary_types_stack.append(cls.model_config['arbitrary_types_allowed'])  # type: ignore
         try:
             fields_schema: core_schema.CoreSchema = core_schema.typed_dict_schema(
                 {k: self.generate_td_field_schema(k, v, decorators) for k, v in fields.items()},
@@ -247,7 +251,7 @@ class GenerateSchema:
         inner_schema = define_expected_missing_refs(inner_schema, recursively_defined_type_refs())
 
         core_config = generate_config(cls.model_config, cls)
-        model_post_init = '__pydantic_post_init__' if hasattr(cls, '__pydantic_post_init__') else None
+        model_post_init = None if cls.model_post_init is BaseModel.model_post_init else 'model_post_init'
 
         model_schema = core_schema.model_schema(
             cls,
@@ -368,6 +372,10 @@ class GenerateSchema:
             # probably need to take care of other subclasses here
         elif isinstance(obj, typing.TypeVar):
             return self._unsubstituted_typevar_schema(obj)
+        elif is_finalvar(obj):
+            if obj is Final:
+                return core_schema.AnySchema(type='any')
+            return self.generate_schema(get_args(obj)[0])
 
         # TODO: _std_types_schema iterates over the __mro__ looking for an expected schema.
         #   This will catch subclasses of typing.Deque, preventing us from properly supporting user-defined
@@ -465,6 +473,7 @@ class GenerateSchema:
             serialization_exclude=common_field['serialization_exclude'],
             validation_alias=common_field['validation_alias'],
             serialization_alias=common_field['serialization_alias'],
+            frozen=common_field['frozen'],
             metadata=common_field['metadata'],
         )
 
@@ -486,6 +495,7 @@ class GenerateSchema:
             serialization_exclude=common_field['serialization_exclude'],
             validation_alias=common_field['validation_alias'],
             serialization_alias=common_field['serialization_alias'],
+            frozen=common_field['frozen'],
             metadata=common_field['metadata'],
         )
 
@@ -536,6 +546,7 @@ class GenerateSchema:
             serialization_exclude=True if field_info.exclude else None,
             validation_alias=field_info.alias,
             serialization_alias=field_info.alias,
+            frozen=field_info.frozen or field_info.final,
             metadata=metadata,
         )
 
@@ -601,7 +612,8 @@ class GenerateSchema:
 
         if not _SUPPORTS_TYPEDDICT and type(typed_dict_cls).__module__ == 'typing':
             raise PydanticUserError(
-                'Please use `typing_extensions.TypedDict` instead of `typing.TypedDict` on Python < 3.11.'
+                'Please use `typing_extensions.TypedDict` instead of `typing.TypedDict` on Python < 3.11.',
+                code='typed-dict-version',
             )
 
         required_keys: frozenset[str] = typed_dict_cls.__required_keys__
@@ -912,7 +924,7 @@ class GenerateSchema:
                 continue
             return encoder(self, obj)
         if dataclasses.is_dataclass(obj):
-            return self._dataclass_schema(obj)
+            return self._dataclass_schema(obj)  # type: ignore
         return None
 
     def _dataclass_schema(self, dataclass: type[StandardDataclass]) -> core_schema.CoreSchema:
@@ -940,7 +952,7 @@ class GenerateSchema:
         if typevar.__bound__:
             return self.generate_schema(typevar.__bound__)
         elif typevar.__constraints__:
-            return self._union_schema(typing.Union[typevar.__constraints__])
+            return self._union_schema(typing.Union[typevar.__constraints__])  # type: ignore
         else:
             return core_schema.AnySchema(type='any')
 
@@ -1172,6 +1184,7 @@ class _CommonField(TypedDict):
     validation_alias: str | list[str | int] | list[list[str | int]] | None
     serialization_alias: str | None
     serialization_exclude: bool | None
+    frozen: bool | None
     metadata: Any
 
 
@@ -1181,6 +1194,7 @@ def _common_field(
     validation_alias: str | list[str | int] | list[list[str | int]] | None = None,
     serialization_alias: str | None = None,
     serialization_exclude: bool | None = None,
+    frozen: bool | None = None,
     metadata: Any = None,
 ) -> _CommonField:
     return {
@@ -1188,5 +1202,6 @@ def _common_field(
         'validation_alias': validation_alias,
         'serialization_alias': serialization_alias,
         'serialization_exclude': serialization_exclude,
+        'frozen': frozen,
         'metadata': metadata,
     }
