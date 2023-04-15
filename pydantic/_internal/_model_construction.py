@@ -11,11 +11,12 @@ from pydantic_core import SchemaSerializer, SchemaValidator
 
 from ..errors import PydanticErrorCodes, PydanticUndefinedAnnotation, PydanticUserError
 from ..fields import FieldInfo, ModelPrivateAttr, PrivateAttr
+from ._config import ConfigWrapper
 from ._decorators import PydanticDecoratorMarker
-from ._fields import Undefined, collect_fields
-from ._generate_schema import GenerateSchema, generate_config
-from ._generics import get_typevars_map
-from ._typing_extra import add_module_globals, is_classvar
+from ._fields import Undefined, collect_model_fields
+from ._generate_schema import GenerateSchema
+from ._generics import get_model_typevars_map
+from ._typing_extra import is_classvar
 from ._utils import ClassAttribute, is_valid_identifier
 
 if typing.TYPE_CHECKING:
@@ -24,7 +25,6 @@ if typing.TYPE_CHECKING:
     from ..config import ConfigDict
     from ..main import BaseModel
 
-__all__ = 'object_setattr', 'init_private_attributes', 'inspect_namespace', 'MockValidator'
 
 IGNORED_TYPES: tuple[Any, ...] = (FunctionType, property, type, classmethod, staticmethod, PydanticDecoratorMarker)
 object_setattr = object.__setattr__
@@ -109,9 +109,9 @@ def inspect_namespace(  # noqa C901
                 )
             else:
                 raise PydanticUserError(
-                    f'A non-annotated attribute was detected: `{var_name} = {value!r}`. All model fields require a '
-                    f'type annotation; if `{var_name}` is not meant to be a field, you may be able to resolve this '
-                    f'error by annotating it as a `ClassVar` or updating `model_config["ignored_types"]`.',
+                    f"A non-annotated attribute was detected: `{var_name} = {value!r}`. All model fields require a "
+                    f"type annotation; if `{var_name}` is not meant to be a field, you may be able to resolve this "
+                    f"error by annotating it as a `ClassVar` or updating `model_config['ignored_types']`.",
                     code='model-field-missing-annotation',
                 )
 
@@ -132,17 +132,12 @@ def single_underscore(name: str) -> bool:
     return name.startswith('_') and not name.startswith('__')
 
 
-def get_model_types_namespace(cls: type[BaseModel], parent_frame_namespace: dict[str, Any] | None) -> dict[str, Any]:
-    ns = add_module_globals(cls, parent_frame_namespace)
-    ns[cls.__name__] = cls
-    return ns
-
-
 def set_model_fields(cls: type[BaseModel], bases: tuple[type[Any], ...], types_namespace: dict[str, Any]) -> None:
     """
     Collect and set `cls.model_fields` and `cls.__class_vars__`.
     """
-    fields, class_vars = collect_fields(cls, bases, types_namespace)
+    typevars_map = get_model_typevars_map(cls)
+    fields, class_vars = collect_model_fields(cls, bases, types_namespace, typevars_map=typevars_map)
 
     apply_alias_generator(cls.model_config, fields)
     cls.model_fields = fields
@@ -152,9 +147,10 @@ def set_model_fields(cls: type[BaseModel], bases: tuple[type[Any], ...], types_n
 def complete_model_class(
     cls: type[BaseModel],
     cls_name: str,
-    types_namespace: dict[str, Any] | None,
+    config_wrapper: ConfigWrapper,
     *,
     raise_errors: bool = True,
+    types_namespace: dict[str, Any] | None,
 ) -> bool:
     """
     Finish building a model class.
@@ -164,10 +160,9 @@ def complete_model_class(
     This logic must be called after class has been created since validation functions must be bound
     and `get_type_hints` requires a class object.
     """
-    generic_metadata = cls.__pydantic_generic_metadata__
-    typevars_map = get_typevars_map(generic_metadata['origin'], generic_metadata['args'])
+    typevars_map = get_model_typevars_map(cls)
     gen_schema = GenerateSchema(
-        cls.model_config['arbitrary_types_allowed'],  # type: ignore
+        config_wrapper,
         types_namespace,
         typevars_map,
     )
@@ -176,7 +171,7 @@ def complete_model_class(
     except PydanticUndefinedAnnotation as e:
         if raise_errors:
             raise
-        if cls.model_config['undefined_types_warning']:  # type: ignore
+        if config_wrapper.undefined_types_warning:
             config_warning_string = (
                 f'`{cls_name}` has an undefined annotation: `{e.name}`. '
                 f'It may be possible to resolve this by setting '
@@ -193,7 +188,7 @@ def complete_model_class(
         )
         return False
 
-    core_config = generate_config(cls.model_config, cls)
+    core_config = config_wrapper.core_config(cls)
 
     # debug(schema)
     cls.__pydantic_core_schema__ = schema
@@ -203,19 +198,19 @@ def complete_model_class(
 
     # set __signature__ attr only for model class, but not for its instances
     cls.__signature__ = ClassAttribute(
-        '__signature__', generate_model_signature(cls.__init__, cls.model_fields, cls.model_config)
+        '__signature__', generate_model_signature(cls.__init__, cls.model_fields, config_wrapper)
     )
     return True
 
 
-def generate_model_signature(init: Callable[..., None], fields: dict[str, FieldInfo], config: ConfigDict) -> Signature:
+def generate_model_signature(
+    init: Callable[..., None], fields: dict[str, FieldInfo], config_wrapper: ConfigWrapper
+) -> Signature:
     """
     Generate signature for model based on its fields
     """
     from inspect import Parameter, Signature, signature
     from itertools import islice
-
-    from ..config import Extra
 
     present_params = signature(init).parameters.values()
     merged_params: dict[str, Parameter] = {}
@@ -233,9 +228,13 @@ def generate_model_signature(init: Callable[..., None], fields: dict[str, FieldI
         merged_params[param.name] = param
 
     if var_kw:  # if custom init has no var_kw, fields which are not declared in it cannot be passed through
-        allow_names = config['populate_by_name']  # type: ignore
+        allow_names = config_wrapper.populate_by_name
         for field_name, field in fields.items():
-            param_name = field.alias or field_name
+            # when alias is a str it should be used for signature generation
+            if isinstance(field.alias, str):
+                param_name = field.alias
+            else:
+                param_name = field_name
             if field_name in merged_params or param_name in merged_params:
                 continue
             elif not is_valid_identifier(param_name):
@@ -251,7 +250,7 @@ def generate_model_signature(init: Callable[..., None], fields: dict[str, FieldI
                 param_name, Parameter.KEYWORD_ONLY, annotation=field.rebuild_annotation(), **kwargs
             )
 
-    if config['extra'] is Extra.allow:  # type: ignore
+    if config_wrapper.extra == 'allow':
         use_var_kw = True
 
     if var_kw and use_var_kw:
@@ -295,7 +294,7 @@ class MockValidator:
 
 
 def apply_alias_generator(config: ConfigDict, fields: dict[str, FieldInfo]) -> None:
-    alias_generator = config['alias_generator']  # type: ignore
+    alias_generator = config.get('alias_generator')
     if alias_generator is None:
         return
 
@@ -305,4 +304,6 @@ def apply_alias_generator(config: ConfigDict, fields: dict[str, FieldInfo]) -> N
             if not isinstance(alias, str):
                 raise TypeError(f'alias_generator {alias_generator} must return str, not {alias.__class__}')
             field_info.alias = alias
+            field_info.validation_alias = alias
+            field_info.serialization_alias = alias
             field_info.alias_priority = 1

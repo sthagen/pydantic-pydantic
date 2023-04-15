@@ -33,7 +33,6 @@ from typing_extensions import Annotated, Literal
 
 from pydantic import (
     BaseModel,
-    Extra,
     Field,
     ImportString,
     ValidationError,
@@ -45,7 +44,6 @@ from pydantic.color import Color
 from pydantic.config import ConfigDict
 from pydantic.dataclasses import dataclass
 from pydantic.errors import PydanticInvalidForJsonSchema
-from pydantic.fields import FieldInfo
 from pydantic.json_schema import (
     DEFAULT_REF_TEMPLATE,
     GenerateJsonSchema,
@@ -1927,7 +1925,7 @@ def test_color_type():
 
 def test_model_with_extra_forbidden():
     class Model(BaseModel):
-        model_config = ConfigDict(extra=Extra.forbid)
+        model_config = ConfigDict(extra='forbid')
         a: str
 
     assert Model.model_json_schema() == {
@@ -2600,33 +2598,6 @@ def test_complex_nested_generic():
             },
         },
         'allOf': [{'$ref': '#/$defs/Model'}],
-    }
-
-
-@pytest.mark.xfail(reason='__pydantic_modify_json_schema__ does not receive FieldInfo')
-def test_schema_with_field_parameter():
-    # TODO: Update so that __pydantic_modify_json_schema__ gets called with the FieldInfo when handling fields
-    class RestrictedAlphabetStr(str):
-        @classmethod
-        def __pydantic_modify_json_schema__(cls, field_schema, field: Optional[FieldInfo]):
-            assert isinstance(field, FieldInfo)
-            alphabet = field.json_schema_extra['alphabet']
-            field_schema['examples'] = [c * 3 for c in alphabet]
-            field_schema['title'] = field.title.lower()
-            return field_schema
-
-    class MyModel(BaseModel):
-        value: RestrictedAlphabetStr = Field(title='RESTRICTED_ALPHABET', json_schema_extra={'alphabet': 'ABC'})
-
-        model_config = {'arbitrary_types_allowed': True}
-
-    assert MyModel.model_json_schema() == {
-        'title': 'MyModel',
-        'type': 'object',
-        'properties': {
-            'value': {'title': 'Value', 'alphabet': 'ABC', 'examples': ['AAA', 'BBB', 'CCC'], 'type': 'string'}
-        },
-        'required': ['value'],
     }
 
 
@@ -3457,5 +3428,32 @@ def test_override_generate_json_schema():
         'properties': {'x': {'title': 'X', 'type': 'integer'}},
         'required': ['x'],
         'title': 'MyModel',
+        'type': 'object',
+    }
+
+
+def test_nested_default_json_schema():
+    class InnerModel(BaseModel):
+        foo: str = 'bar'
+        baz: str = Field(default='foobar', alias='my_alias')
+
+    class OuterModel(BaseModel):
+        nested_field: InnerModel = InnerModel()
+
+    assert OuterModel.model_json_schema() == {
+        '$defs': {
+            'InnerModel': {
+                'properties': {
+                    'foo': {'default': 'bar', 'title': 'Foo', 'type': 'string'},
+                    'my_alias': {'default': 'foobar', 'title': 'My Alias', 'type': 'string'},
+                },
+                'title': 'InnerModel',
+                'type': 'object',
+            }
+        },
+        'properties': {
+            'nested_field': {'allOf': [{'$ref': '#/$defs/InnerModel'}], 'default': {'my_alias': 'foobar', 'foo': 'bar'}}
+        },
+        'title': 'OuterModel',
         'type': 'object',
     }

@@ -5,13 +5,13 @@ import sys
 from collections.abc import Hashable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set, Union
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, Generic, List, Optional, Set, TypeVar, Union
 
 import pytest
 from typing_extensions import Literal
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Extra, FieldValidationInfo, ValidationError
+from pydantic import AnalyzedType, BaseModel, ConfigDict, FieldValidationInfo, ValidationError
 from pydantic.decorators import field_validator
 from pydantic.fields import Field, FieldInfo
 from pydantic.json_schema import model_json_schema
@@ -139,13 +139,13 @@ def test_validate_assignment_value_change():
     [
         ConfigDict(validate_assignment=False),
         ConfigDict(extra=None),
-        ConfigDict(extra=Extra.forbid),
-        ConfigDict(extra=Extra.ignore),
+        ConfigDict(extra='forbid'),
+        ConfigDict(extra='ignore'),
         ConfigDict(validate_assignment=False, extra=None),
-        ConfigDict(validate_assignment=False, extra=Extra.forbid),
-        ConfigDict(validate_assignment=False, extra=Extra.ignore),
-        ConfigDict(validate_assignment=False, extra=Extra.allow),
-        ConfigDict(validate_assignment=True, extra=Extra.allow),
+        ConfigDict(validate_assignment=False, extra='forbid'),
+        ConfigDict(validate_assignment=False, extra='ignore'),
+        ConfigDict(validate_assignment=False, extra='allow'),
+        ConfigDict(validate_assignment=True, extra='allow'),
     ],
 )
 def test_validate_assignment_extra_unknown_field_assigned_allowed(config: ConfigDict):
@@ -165,8 +165,8 @@ def test_validate_assignment_extra_unknown_field_assigned_allowed(config: Config
     [
         ConfigDict(validate_assignment=True),
         ConfigDict(validate_assignment=True, extra=None),
-        ConfigDict(validate_assignment=True, extra=Extra.forbid),
-        ConfigDict(validate_assignment=True, extra=Extra.ignore),
+        ConfigDict(validate_assignment=True, extra='forbid'),
+        ConfigDict(validate_assignment=True, extra='ignore'),
     ],
 )
 def test_validate_assignment_extra_unknown_field_assigned_errors(config: ConfigDict):
@@ -869,26 +869,6 @@ def test_inherit_builtin_dataclass():
     assert pika.z == 3
 
 
-@pytest.mark.xfail(reason='cannot parse a tuple into a dataclass')
-def test_dataclass_arbitrary():
-    class ArbitraryType:
-        def __init__(self):
-            ...
-
-    @dataclasses.dataclass
-    class Test:
-        foo: ArbitraryType
-        bar: List[ArbitraryType]
-
-    class TestModel(BaseModel):
-        a: ArbitraryType
-        b: Test
-
-        model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    TestModel(a=ArbitraryType(), b=(ArbitraryType(), [ArbitraryType()]))
-
-
 def test_forward_stdlib_dataclass_params():
     @dataclasses.dataclass(frozen=True)
     class Item:
@@ -968,9 +948,7 @@ import dataclasses
 import pydantic
 
 
-@pydantic.dataclasses.dataclass(
-    config=pydantic.config.ConfigDict(validate_assignment=True)
-)
+@pydantic.dataclasses.dataclass(config=pydantic.config.ConfigDict(validate_assignment=True))
 class BuiltInDataclassForPickle:
     value: int
         """
@@ -988,48 +966,74 @@ class BuiltInDataclassForPickle:
         restored_obj.value = 'value of a wrong type'
 
 
-def gen_2162_dataclasses():
-    @dataclasses.dataclass(frozen=True)
-    class StdLibFoo:
-        a: str
-        b: int
+def lazy_cases_for_dataclass_equality_checks():
+    """
+    The reason for the convoluted structure of this function is to avoid
+    creating the classes while collecting tests, which may trigger breakpoints
+    etc. while working on one specific test.
+    """
+    cases = []
 
-    @pydantic.dataclasses.dataclass(frozen=True)
-    class PydanticFoo:
-        a: str
-        b: int
+    def get_cases():
+        if cases:
+            return cases  # cases already "built"
 
-    @dataclasses.dataclass(frozen=True)
-    class StdLibBar:
-        c: StdLibFoo
+        @dataclasses.dataclass(frozen=True)
+        class StdLibFoo:
+            a: str
+            b: int
 
-    @pydantic.dataclasses.dataclass(frozen=True)
-    class PydanticBar:
-        c: PydanticFoo
+        @pydantic.dataclasses.dataclass(frozen=True)
+        class PydanticFoo:
+            a: str
+            b: int
 
-    @dataclasses.dataclass(frozen=True)
-    class StdLibBaz:
-        c: PydanticFoo
+        @dataclasses.dataclass(frozen=True)
+        class StdLibBar:
+            c: StdLibFoo
 
-    @pydantic.dataclasses.dataclass(frozen=True)
-    class PydanticBaz:
-        c: StdLibFoo
+        @pydantic.dataclasses.dataclass(frozen=True)
+        class PydanticBar:
+            c: PydanticFoo
 
-    foo = StdLibFoo(a='Foo', b=1)
-    yield foo, StdLibBar(c=foo)
+        @dataclasses.dataclass(frozen=True)
+        class StdLibBaz:
+            c: PydanticFoo
 
-    foo = PydanticFoo(a='Foo', b=1)
-    yield foo, PydanticBar(c=foo)
+        @pydantic.dataclasses.dataclass(frozen=True)
+        class PydanticBaz:
+            c: StdLibFoo
 
-    foo = PydanticFoo(a='Foo', b=1)
-    yield foo, StdLibBaz(c=foo)
+        foo = StdLibFoo(a='Foo', b=1)
+        cases.append((foo, StdLibBar(c=foo)))
 
-    foo = StdLibFoo(a='Foo', b=1)
-    yield foo, PydanticBaz(c=foo)
+        foo = PydanticFoo(a='Foo', b=1)
+        cases.append((foo, PydanticBar(c=foo)))
+
+        foo = PydanticFoo(a='Foo', b=1)
+        cases.append((foo, StdLibBaz(c=foo)))
+
+        foo = StdLibFoo(a='Foo', b=1)
+        cases.append((foo, PydanticBaz(c=foo)))
+
+        return cases
+
+    case_ids = ['stdlib_stdlib', 'pydantic_pydantic', 'pydantic_stdlib', 'stdlib_pydantic']
+
+    def case(i):
+        def get_foo_bar():
+            return get_cases()[i]
+
+        get_foo_bar.__name__ = case_ids[i]  # get nice names in pytest output
+        return get_foo_bar
+
+    return [case(i) for i in range(4)]
 
 
-@pytest.mark.parametrize('foo,bar', gen_2162_dataclasses())
-def test_issue_2162(foo, bar):
+@pytest.mark.parametrize('foo_bar_getter', lazy_cases_for_dataclass_equality_checks())
+def test_dataclass_equality_for_field_values(foo_bar_getter):
+    # Related to issue #2162
+    foo, bar = foo_bar_getter()
     assert dataclasses.asdict(foo) == dataclasses.asdict(bar.c)
     assert dataclasses.astuple(foo) == dataclasses.astuple(bar.c)
     assert foo == bar.c
@@ -1336,22 +1340,21 @@ def test_keeps_custom_properties():
         assert instance.a == test_string
 
 
-@pytest.mark.xfail(reason='model_config["extra"] is not respected')
 def test_ignore_extra():
-    @pydantic.dataclasses.dataclass(config=dict(extra=Extra.ignore))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='ignore'))
     class Foo:
         x: int
 
     foo = Foo(**{'x': '1', 'y': '2'})
-    assert foo.__dict__ == {'x': 1, '__pydantic_initialised__': True}
+    assert foo.__dict__ == {'x': 1}
 
 
 def test_ignore_extra_subclass():
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.ignore))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='ignore'))
     class Foo:
         x: int
 
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.ignore))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='ignore'))
     class Bar(Foo):
         y: int
 
@@ -1360,7 +1363,7 @@ def test_ignore_extra_subclass():
 
 
 def test_allow_extra():
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.allow))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='allow'))
     class Foo:
         x: int
 
@@ -1369,11 +1372,11 @@ def test_allow_extra():
 
 
 def test_allow_extra_subclass():
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.allow))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='allow'))
     class Foo:
         x: int
 
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.allow))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='allow'))
     class Bar(Foo):
         y: int
 
@@ -1382,7 +1385,7 @@ def test_allow_extra_subclass():
 
 
 def test_forbid_extra():
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.forbid))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='forbid'))
     class Foo:
         x: int
 
@@ -1392,17 +1395,54 @@ def test_forbid_extra():
         Foo(**{'x': '1', 'y': '2'})
 
 
-@pytest.mark.xfail(reason='recursive references need rebuilding?')
+@pytest.mark.xfail(reason='need to make it possible to rebuild dataclasses')
 def test_self_reference_dataclass():
     @pydantic.dataclasses.dataclass
     class MyDataclass:
-        self_reference: 'MyDataclass'
+        self_reference: Optional['MyDataclass'] = None
 
-    annotation = MyDataclass.__pydantic_fields__['self_reference'].annotation
-    # Currently, this is true:
-    # assert isinstance(MyDataclass, PydanticForwardRef)
-    # TODO: Probably need a way to "model_rebuild" a dataclass
-    assert annotation is MyDataclass
+    # rebuild_pydantic_dataclass(MyDataclass)
+
+    assert MyDataclass.__pydantic_fields__['self_reference'].annotation == Optional[MyDataclass]
+
+    instance = MyDataclass(self_reference=MyDataclass(self_reference=MyDataclass()))
+    assert AnalyzedType(MyDataclass).dump_python(instance) == {
+        'self_reference': {'self_reference': {'self_reference': None}}
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        MyDataclass(self_reference=MyDataclass(self_reference=1))
+
+    assert exc_info.value.errors() == [
+        {
+            'ctx': {'dataclass_name': 'MyDataclass'},
+            'input': 1,
+            'loc': ('self_reference',),
+            'msg': 'Input should be a dictionary or an instance of MyDataclass',
+            'type': 'dataclass_type',
+        }
+    ]
+
+
+@pytest.mark.xfail(reason='need to make it possible to rebuild dataclasses')
+def test_cyclic_reference_dataclass():
+    @pydantic.dataclasses.dataclass
+    class D1:
+        d2: Optional['D2'] = None
+
+    @pydantic.dataclasses.dataclass
+    class D2:
+        d1: Optional[D1] = None
+
+    # rebuild_pydantic_dataclass(D1)
+
+    instance = D1(d2=D2(d1=D1(d2=D2(d1=D1()))))
+
+    assert AnalyzedType(D1).dump_python(instance) == {...}
+
+    with pytest.raises(ValidationError) as exc_info:
+        D1(d2=D2(d1=D1(d2=D2(d1=D2()))))
+    assert exc_info.value.errors() == [...]
 
 
 @pytest.mark.skipif(sys.version_info < (3, 10), reason='kw_only is not available in python < 3.10')
@@ -1419,7 +1459,7 @@ def test_kw_only():
 
 
 def test_extra_forbid_list_no_error():
-    @pydantic.dataclasses.dataclass(config=dict(extra=Extra.forbid))
+    @pydantic.dataclasses.dataclass(config=dict(extra='forbid'))
     class Bar:
         ...
 
@@ -1431,7 +1471,7 @@ def test_extra_forbid_list_no_error():
 
 
 def test_extra_forbid_list_error():
-    @pydantic.dataclasses.dataclass(config=ConfigDict(extra=Extra.forbid))
+    @pydantic.dataclasses.dataclass(config=ConfigDict(extra='forbid'))
     class Bar:
         ...
 
@@ -1531,7 +1571,7 @@ def test_config_as_type_deprecated():
         validate_assignment = True
 
     with pytest.warns(
-        DeprecationWarning, match='Support for "config" as "type" is deprecated and will be removed in a future version'
+        DeprecationWarning, match='Support for class-based `config` is deprecated, use ConfigDict instead.'
     ):
 
         @pydantic.dataclasses.dataclass(config=Config)
@@ -1690,3 +1730,83 @@ def test_dataclass_config_validate_default():
             'type': 'assertion_error',
         }
     ]
+
+
+def dataclass_decorators():
+    def combined(cls):
+        """
+        Should be equivalent to:
+        @pydantic.dataclasses.dataclass
+        @dataclasses.dataclass
+        """
+        return pydantic.dataclasses.dataclass(dataclasses.dataclass(cls))
+
+    decorators = [pydantic.dataclasses.dataclass, dataclasses.dataclass, combined]
+    ids = ['pydantic', 'stdlib', 'combined']
+    # decorators = [pydantic.dataclasses.dataclass]
+    # ids = ['pydantic']
+    # decorators = [dataclasses.dataclass]
+    # ids = ['stdlib']
+    return {'argvalues': decorators, 'ids': ids}
+
+
+@pytest.mark.parametrize('dataclass_decorator', **dataclass_decorators())
+def test_unparametrized_generic_dataclass(dataclass_decorator):
+    T = TypeVar('T')
+
+    @dataclass_decorator
+    class GenericDataclass(Generic[T]):
+        x: T
+
+    # In principle we could call GenericDataclass(...) below, but this won't do validation
+    # for standard dataclasses, so we just use AnalyzedType to get validation for each.
+    validator = pydantic.AnalyzedType(GenericDataclass)
+
+    assert validator.validate_python({'x': None}).x is None
+    assert validator.validate_python({'x': 1}).x == 1
+
+    with pytest.raises(ValidationError) as exc_info:
+        validator.validate_python({'y': None})
+    assert exc_info.value.errors() == [
+        {'input': {'y': None}, 'loc': ('x',), 'msg': 'Field required', 'type': 'missing'}
+    ]
+
+
+@pytest.mark.parametrize('dataclass_decorator', **dataclass_decorators())
+@pytest.mark.parametrize(
+    'annotation,input_value,error,output_value',
+    [
+        (int, 1, False, 1),
+        (str, 'a', False, 'a'),
+        (
+            int,
+            'a',
+            True,
+            [
+                {
+                    'input': 'a',
+                    'loc': ('x',),
+                    'msg': 'Input should be a valid integer, unable to parse string as an ' 'integer',
+                    'type': 'int_parsing',
+                }
+            ],
+        ),
+    ],
+)
+def test_parametrized_generic_dataclass(dataclass_decorator, annotation, input_value, error, output_value):
+    T = TypeVar('T')
+
+    @dataclass_decorator
+    class GenericDataclass(Generic[T]):
+        x: T
+
+    # Need to use AnalyzedType here because GenericDataclass[annotation] will be a GenericAlias, which delegates
+    # method calls to the (non-parametrized) origin class. This is essentially a limitation of typing._GenericAlias.
+    validator = pydantic.AnalyzedType(GenericDataclass[annotation])
+
+    if not error:
+        assert validator.validate_python({'x': input_value}).x == output_value
+    else:
+        with pytest.raises(ValidationError) as exc_info:
+            validator.validate_python({'x': input_value})
+        assert exc_info.value.errors() == output_value
