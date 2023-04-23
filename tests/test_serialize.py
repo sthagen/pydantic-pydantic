@@ -174,7 +174,7 @@ def test_annotated_customisation():
 
     class CommaFriendlyIntLogic:
         @classmethod
-        def __modify_pydantic_core_schema__(cls, _schema):
+        def __get_pydantic_core_schema__(cls, _source, _handler):
             # here we ignore the schema argument (which is just `{'type': 'int'}`) and return our own
             return core_schema.general_before_validator_function(
                 parse_int,
@@ -625,7 +625,7 @@ def test_serializer_allow_reuse_inheritance_override():
 
     # overriding a serializer with a function / class var
     # of the same name is allowed
-    # to mimick how inheritance works
+    # to mimic how inheritance works
     # the serializer in the child class replaces the parent
     # (without modifying the parent class itself)
     class Child1(Parent):

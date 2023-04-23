@@ -3,12 +3,13 @@ from __future__ import annotations as _annotations
 import dataclasses as _dataclasses
 import re
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic_core import MultiHostUrl, PydanticCustomError, Url, core_schema
 from typing_extensions import Annotated, TypeAlias
 
 from ._internal import _fields, _repr
+from ._migration import getattr_migration
 
 if TYPE_CHECKING:
     import email_validator
@@ -133,14 +134,10 @@ else:
     class EmailStr:
         @classmethod
         def __get_pydantic_core_schema__(
-            cls, schema: core_schema.CoreSchema | None = None, **_kwargs: Any
+            cls, source: type[Any], handler: Callable[[Any], core_schema.CoreSchema]
         ) -> core_schema.CoreSchema:
             import_email_validator()
-            if schema is None:
-                return core_schema.general_after_validator_function(cls.validate, core_schema.str_schema())
-            else:
-                assert schema['type'] == 'str', 'EmailStr must be used with string fields'
-                return core_schema.general_after_validator_function(cls.validate, schema)
+            return core_schema.general_after_validator_function(cls.validate, core_schema.str_schema())
 
         @classmethod
         def __pydantic_modify_json_schema__(cls, field_schema: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +165,9 @@ class NameEmail(_repr.Representation):
         return field_schema
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, **_kwargs: Any) -> core_schema.AfterValidatorFunctionSchema:
+    def __get_pydantic_core_schema__(
+        cls, source: type[Any], handler: Callable[[Any], core_schema.CoreSchema]
+    ) -> core_schema.CoreSchema:
         import_email_validator()
         return core_schema.general_after_validator_function(
             cls._validate,
@@ -208,7 +207,9 @@ class IPvAnyAddress:
         return field_schema
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, **_kwargs: Any) -> core_schema.PlainValidatorFunctionSchema:
+    def __get_pydantic_core_schema__(
+        cls, source: type[Any], handler: Callable[[Any], core_schema.CoreSchema]
+    ) -> core_schema.CoreSchema:
         return core_schema.general_plain_validator_function(cls._validate)
 
     @classmethod
@@ -236,7 +237,9 @@ class IPvAnyInterface:
         return field_schema
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, **_kwargs: Any) -> core_schema.PlainValidatorFunctionSchema:
+    def __get_pydantic_core_schema__(
+        cls, source: type[Any], handler: Callable[[Any], core_schema.CoreSchema]
+    ) -> core_schema.CoreSchema:
         return core_schema.general_plain_validator_function(cls._validate)
 
     @classmethod
@@ -266,7 +269,9 @@ class IPvAnyNetwork:
         return field_schema
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, **_kwargs: Any) -> core_schema.PlainValidatorFunctionSchema:
+    def __get_pydantic_core_schema__(
+        cls, source: type[Any], handler: Callable[[Any], core_schema.CoreSchema]
+    ) -> core_schema.CoreSchema:
         return core_schema.general_plain_validator_function(cls._validate)
 
     @classmethod
@@ -304,3 +309,6 @@ def validate_email(value: str) -> tuple[str, str]:
         ) from e
 
     return name or parts['local'], parts['email']
+
+
+__getattr__ = getattr_migration(__name__)

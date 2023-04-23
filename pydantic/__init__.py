@@ -9,15 +9,16 @@ from pydantic_core.core_schema import (
 )
 
 from . import dataclasses
+from ._migration import getattr_migration
 from .analyzed_type import AnalyzedType
 from .config import ConfigDict, Extra
 from .decorators import field_serializer, field_validator, model_serializer, root_validator, validator
 from .deprecated.config import BaseConfig
+from .deprecated.tools import *
 from .errors import *
-from .fields import Field, PrivateAttr
+from .fields import AliasChoices, AliasPath, Field, PrivateAttr, computed_field
 from .main import *
 from .networks import *
-from .tools import *
 from .types import *
 from .validate_call import validate_call
 from .version import VERSION
@@ -52,9 +53,13 @@ __all__ = [
     'ValidationError',
     'PydanticUserError',
     'PydanticSchemaGenerationError',
+    'PydanticImportError',
     'PydanticUndefinedAnnotation',
     # fields
+    'AliasPath',
+    'AliasChoices',
     'Field',
+    'computed_field',
     # main
     'BaseModel',
     'create_model',
@@ -129,3 +134,6 @@ __all__ = [
     # version
     'VERSION',
 ]
+
+
+__getattr__ = getattr_migration(__name__)

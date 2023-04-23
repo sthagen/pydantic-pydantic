@@ -1,27 +1,36 @@
 import importlib.util
 import re
 import sys
+from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, FrozenSet, Generic, List, Optional, Sequence, Set, Tuple, Type, TypeVar, Union
+from typing import Any, Callable, Dict, FrozenSet, Generic, List, Optional, Sequence, Set, Tuple, Type, TypeVar, Union
 
 import pytest
 from dirty_equals import HasRepr, IsStr
-from pydantic_core import core_schema
+from pydantic_core import PydanticSerializationError, core_schema
 from typing_extensions import Annotated, get_args
 
 from pydantic import (
     AnalyzedType,
     BaseModel,
     ConfigDict,
+    PydanticInvalidForJsonSchema,
     PydanticSchemaGenerationError,
     ValidationError,
     constr,
     errors,
 )
-from pydantic.decorators import field_validator
-from pydantic.fields import Field
+from pydantic.decorators import (
+    field_serializer,
+    field_validator,
+    model_serializer,
+    model_validator,
+    root_validator,
+    validator,
+)
+from pydantic.fields import Field, computed_field
 
 
 def test_str_bytes():
@@ -1861,7 +1870,7 @@ def test_custom_generic_validators():
             self.t2 = t2
 
         @classmethod
-        def __get_pydantic_core_schema__(cls, source, **kwargs):
+        def __get_pydantic_core_schema__(cls, source: Any, handler: Callable[[Any], core_schema.CoreSchema]):
             schema = core_schema.is_instance_schema(cls)
 
             args = get_args(source)
@@ -1989,22 +1998,11 @@ def test_hashable_required():
     class Model(BaseModel):
         v: Hashable
 
-        # TODO: Should arbitrary_types_allowed be necessary for Hashable?
-        #   "ideally I guess we should have a validator for this."
-        #   https://github.com/pydantic/pydantic/pull/5151#discussion_r1130684977
-        model_config = dict(arbitrary_types_allowed=True)
-
     Model(v=None)
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[])
     assert exc_info.value.errors() == [
-        {
-            'ctx': {'class': 'Hashable'},
-            'input': [],
-            'loc': ('v',),
-            'msg': 'Input should be an instance of Hashable',
-            'type': 'is_instance_of',
-        }
+        {'input': [], 'loc': ('v',), 'msg': 'Input should be hashable', 'type': 'is_hashable'}
     ]
     with pytest.raises(ValidationError) as exc_info:
         Model()
@@ -2016,10 +2014,37 @@ def test_hashable_optional(default):
     class Model(BaseModel):
         v: Hashable = default
 
-        model_config = dict(arbitrary_types_allowed=True)
-
     Model(v=None)
     Model()
+
+
+def test_hashable_serialization():
+    class Model(BaseModel):
+        v: Hashable
+
+    class HashableButNotSerializable:
+        def __hash__(self):
+            return 0
+
+    assert Model(v=(1,)).model_dump_json() == '{"v":[1]}'
+    m = Model(v=HashableButNotSerializable())
+    with pytest.raises(
+        PydanticSerializationError, match='Unable to serialize unknown type:.*HashableButNotSerializable'
+    ):
+        m.model_dump_json()
+
+
+def test_hashable_json_schema():
+    class Model(BaseModel):
+        v: Hashable
+
+    with pytest.raises(
+        PydanticInvalidForJsonSchema,
+        match=re.escape(
+            "Cannot generate a JsonSchema for core_schema.IsInstanceSchema (<class 'collections.abc.Hashable'>)"
+        ),
+    ):
+        Model.model_json_schema()
 
 
 def test_default_factory_called_once():
@@ -2248,3 +2273,76 @@ def test_parent_field_with_default():
     assert c.a == 1
     assert c.b == 2
     assert c.c == 3
+
+
+@pytest.mark.parametrize(
+    'bases',
+    [
+        (BaseModel, ABC),
+        (ABC, BaseModel),
+        (BaseModel,),
+    ],
+)
+def test_abstractmethod_missing_for_all_decorators(bases):
+    class AbstractSquare(*bases):
+        side: float
+
+        @field_validator('side')
+        @classmethod
+        @abstractmethod
+        def my_field_validator(cls, v):
+            raise NotImplementedError
+
+        @model_validator(mode='wrap')
+        @classmethod
+        @abstractmethod
+        def my_model_validator(cls, values, handler, info):
+            raise NotImplementedError
+
+        @root_validator(skip_on_failure=True)
+        @classmethod
+        @abstractmethod
+        def my_root_validator(cls, values):
+            raise NotImplementedError
+
+        with pytest.warns(DeprecationWarning):
+
+            @validator('side')
+            @classmethod
+            @abstractmethod
+            def my_validator(cls, value, **kwargs):
+                raise NotImplementedError
+
+        @model_serializer(mode='wrap')
+        @abstractmethod
+        def my_model_serializer(self, handler, info):
+            raise NotImplementedError
+
+        @field_serializer('side')
+        @abstractmethod
+        def my_serializer(self, v, _info):
+            raise NotImplementedError
+
+        @computed_field
+        @property
+        @abstractmethod
+        def my_computed_field(self):
+            raise NotImplementedError
+
+    class Square(AbstractSquare):
+        pass
+
+    with pytest.raises(
+        TypeError,
+        match=(
+            "Can't instantiate abstract class Square with abstract methods"
+            " my_computed_field,"
+            " my_field_validator,"
+            " my_model_serializer,"
+            " my_model_validator,"
+            " my_root_validator,"
+            " my_serializer,"
+            " my_validator"
+        ),
+    ):
+        Square(side=1.0)

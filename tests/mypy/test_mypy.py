@@ -77,6 +77,15 @@ cases = [
     ('pyproject-plugin.toml', 'plugin_fail_baseConfig.py', 'plugin-fail-baseConfig.txt'),
     ('pyproject-plugin-strict.toml', 'plugin_success_baseConfig.py', 'plugin-success-strict-baseConfig.txt'),
     ('pyproject-plugin-strict.toml', 'plugin_fail_baseConfig.py', 'plugin-fail-strict-baseConfig.txt'),
+    pytest.param(
+        'pyproject-default.toml',
+        'computed_fields.py',
+        'computed_fields.txt',
+        marks=pytest.mark.skipif(
+            sys.version_info < (3, 8) or MYPY_VERSION_TUPLE < (0, 982),
+            reason='cached_property is only available in Python 3.8+, errors are different with mypy 0.971',
+        ),
+    ),
 ]
 
 
@@ -201,6 +210,7 @@ def test_bad_toml_config() -> None:
 
 
 @pytest.mark.parametrize('module', sorted(executable_modules))
+@pytest.mark.filterwarnings('ignore:.*is deprecated.*:DeprecationWarning')
 def test_success_cases_run(module: str) -> None:
     """
     Ensure the "success" files can actually be executed
@@ -210,9 +220,9 @@ def test_success_cases_run(module: str) -> None:
 
 def test_explicit_reexports():
     from pydantic import __all__ as root_all
+    from pydantic.deprecated.tools import __all__ as tools
     from pydantic.main import __all__ as main
     from pydantic.networks import __all__ as networks
-    from pydantic.tools import __all__ as tools
     from pydantic.types import __all__ as types
 
     for name, export_all in [('main', main), ('network', networks), ('tools', tools), ('types', types)]:

@@ -4,7 +4,9 @@ import pytest
 
 from pydantic import BaseModel, ValidationError
 from pydantic.dataclasses import dataclass
-from pydantic.tools import parse_obj_as, schema_json_of, schema_of
+from pydantic.deprecated.tools import parse_obj_as, schema_json_of, schema_of
+
+pytestmark = pytest.mark.filterwarnings('ignore::DeprecationWarning')
 
 
 @pytest.mark.parametrize('obj,type_,parsed', [('1', int, 1), (['1'], List[int], [1])])

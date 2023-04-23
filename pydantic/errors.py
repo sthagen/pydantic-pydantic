@@ -1,14 +1,18 @@
+"""
+Pydantic errors.
+"""
 from __future__ import annotations as _annotations
 
 import re
 
 from typing_extensions import Literal
 
-from .version import VERSION
+from ._migration import getattr_migration
 
 __all__ = (
     'PydanticUserError',
     'PydanticUndefinedAnnotation',
+    'PydanticImportError',
     'PydanticSchemaGenerationError',
     'PydanticInvalidForJsonSchema',
 )
@@ -17,7 +21,8 @@ __all__ = (
 # We use this URL to allow for future flexibility about how we host the docs, while allowing for Pydantic
 # code in the while with "old" URLs to still work.
 # 'u' refers to "user errors" - e.g. errors caused by developers using pydantic, as opposed to validation errors.
-DEV_ERROR_DOCS_URL = f'https://errors.pydantic.dev/{VERSION}/u/'
+# DEV_ERROR_DOCS_URL = f'https://errors.pydantic.dev/{VERSION}/u/'
+DEV_ERROR_DOCS_URL = '<TODO: Set up the errors URLs>/'
 PydanticErrorCodes = Literal[
     'decorator-missing-field',
     'dataclass-not-fully-defined',
@@ -36,6 +41,7 @@ PydanticErrorCodes = Literal[
     'base-model-instantiated',
     'undefined-annotation',
     'schema-for-unknown-type',
+    'import-error',
     'create-model-field-definitions',
     'create-model-config-base',
     'validator-no-fields',
@@ -54,7 +60,11 @@ PydanticErrorCodes = Literal[
 
 class PydanticErrorMixin:
     """
-    Pydantic Error Mixin for common functions
+    A mixin class for common functionality shared by all Pydantic-specific errors.
+
+    Attributes:
+        message (str): A message describing the error.
+        code (PydanticErrorCodes | None): An optional error code from PydanticErrorCodes enum.
     """
 
     def __init__(self, message: str, *, code: PydanticErrorCodes | None) -> None:
@@ -70,15 +80,16 @@ class PydanticErrorMixin:
 
 class PydanticUserError(PydanticErrorMixin, TypeError):
     """
-    Error caused by incorrect use of Pydantic
+    Error raised due to incorrect use of Pydantic.
     """
-
-    pass
 
 
 class PydanticUndefinedAnnotation(PydanticErrorMixin, NameError):
-    """
-    Error occurs when annotations are not yet defined
+    """A subclass of `NameError` raised when handling undefined annotations during `CoreSchema` generation.
+
+    Attributes:
+        name (str): Name of the error.
+        message (str): Description of the error.
     """
 
     def __init__(self, name: str, message: str) -> None:
@@ -87,6 +98,15 @@ class PydanticUndefinedAnnotation(PydanticErrorMixin, NameError):
 
     @classmethod
     def from_name_error(cls, name_error: NameError) -> PydanticUndefinedAnnotation:
+        """
+        Convert a `NameError` to a `PydanticUndefinedAnnotation` error.
+
+        Args:
+            name_error (NameError): `NameError` to be converted.
+
+        Returns:
+            PydanticUndefinedAnnotation: Converted `PydanticUndefinedAnnotation` error.
+        """
         try:
             name = name_error.name  # type: ignore  # python > 3.10
         except AttributeError:
@@ -94,9 +114,19 @@ class PydanticUndefinedAnnotation(PydanticErrorMixin, NameError):
         return cls(name=name, message=str(name_error))
 
 
+class PydanticImportError(PydanticErrorMixin, ImportError):
+    """Error occurs when an import fails due to module changes between V1 and V2."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code='import-error')
+
+
 class PydanticSchemaGenerationError(PydanticUserError):
     """
-    Error occurs when schema has not been generated correctly.
+    Error raised during failures to generate a `CoreSchema` for some type.
+
+    Attributes:
+        message (str): Description of the error.
     """
 
     def __init__(self, message: str) -> None:
@@ -105,8 +135,14 @@ class PydanticSchemaGenerationError(PydanticUserError):
 
 class PydanticInvalidForJsonSchema(PydanticUserError):
     """
-    Error raised when a type from a CoreSchema is not compatible with JSON schema generation
+    Error raised during failures to generate a JSON schema for some `CoreSchema`.
+
+    Attributes:
+        message (str): Description of the error.
     """
 
     def __init__(self, message: str) -> None:
         super().__init__(message, code='invalid-for-json-schema')
+
+
+__getattr__ = getattr_migration(__name__)

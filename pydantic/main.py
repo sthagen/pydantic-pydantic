@@ -10,7 +10,7 @@ from copy import copy, deepcopy
 from inspect import getdoc
 from pathlib import Path
 from types import prepare_class, resolve_bases
-from typing import Any, Generic, Mapping, Tuple, cast
+from typing import Any, Callable, Generic, Mapping, Tuple, cast
 
 import pydantic_core
 import typing_extensions
@@ -26,11 +26,12 @@ from ._internal import (
     _utils,
 )
 from ._internal._fields import Undefined
+from ._migration import getattr_migration
 from .config import ConfigDict
 from .deprecated import copy_internals as _deprecated_copy_internals
 from .deprecated import parse as _deprecated_parse
 from .errors import PydanticUndefinedAnnotation, PydanticUserError
-from .fields import Field, FieldInfo, ModelPrivateAttr
+from .fields import ComputedFieldInfo, Field, FieldInfo, ModelPrivateAttr
 from .json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaValue, model_json_schema
 
 if typing.TYPE_CHECKING:
@@ -38,7 +39,6 @@ if typing.TYPE_CHECKING:
 
     from pydantic_core import CoreSchema, SchemaSerializer, SchemaValidator
 
-    from ._internal._generate_schema import GenerateSchema
     from ._internal._utils import AbstractSetIntStr, MappingIntStrAny
 
     AnyClassMethod = classmethod[Any, Any, Any]
@@ -64,7 +64,7 @@ class _ModelNamespaceDict(dict):  # type: ignore[type-arg]
 
     def __setitem__(self, k: str, v: object) -> None:
         existing: Any = self.get(k, None)
-        if existing and v is not existing and isinstance(existing, _decorators.PydanticDecoratorMarker):
+        if existing and v is not existing and isinstance(existing, _decorators.PydanticDescriptorProxy):
             warnings.warn(f'`{k}` overrides an existing Pydantic `{existing.decorator_info.decorator_repr}` decorator')
 
         return super().__setitem__(k, v)
@@ -231,7 +231,9 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         __pydantic_self__.__pydantic_validator__.validate_python(data, self_instance=__pydantic_self__)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source: type[BaseModel], gen_schema: GenerateSchema) -> CoreSchema | None:
+    def __get_pydantic_core_schema__(
+        cls, __source: type[BaseModel], __handler: Callable[[Any], CoreSchema]
+    ) -> CoreSchema:
         # Only use the cached value from this _exact_ class; we don't want one from a parent class
         # This is why we check `cls.__dict__` and don't use `cls.__pydantic_core_schema__` or similar.
         if '__pydantic_core_schema__' in cls.__dict__:
@@ -241,7 +243,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             if not cls.__pydantic_generic_metadata__['origin']:
                 return cls.__pydantic_core_schema__
 
-        return None
+        return __handler(__source)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -274,6 +276,13 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         """
         return self.__pydantic_fields_set__
 
+    @property
+    def model_computed_fields(self) -> dict[str, ComputedFieldInfo]:
+        """
+        The computed fields of this model instance.
+        """
+        return {k: v.info for k, v in self.__pydantic_decorators__.computed_fields.items()}
+
     @classmethod
     def model_validate_json(
         cls: type[Model],
@@ -298,10 +307,15 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
                 f'"{name}" is a ClassVar of `{self.__class__.__name__}` and cannot be set on an instance. '
                 f'If you want to set a value on the class, use `{self.__class__.__name__}.{name} = value`.'
             )
-        if name.startswith('_'):
+        elif name.startswith('_'):
             _object_setattr(self, name, value)
+            return
         elif self.model_config.get('frozen', None):
             raise TypeError(f'"{self.__class__.__name__}" is frozen and does not support item assignment')
+
+        attr = getattr(self.__class__, name, None)
+        if isinstance(attr, property):
+            attr.__set__(self, value)
         elif self.model_config.get('validate_assignment', None):
             self.__pydantic_validator__.validate_assignment(self, name, value)
         elif self.model_config.get('extra') != 'allow' and name not in self.model_fields:
@@ -546,11 +560,12 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         return m
 
     def __repr_args__(self) -> _repr.ReprArgs:
-        return [
+        yield from [
             (k, v)
             for k, v in self.__dict__.items()
             if not k.startswith('_') and (k not in self.model_fields or self.model_fields[k].repr)
         ]
+        yield from [(k, getattr(self, k)) for k, v in self.model_computed_fields.items() if v.repr]
 
     def __class_getitem__(
         cls, typevar_values: type[Any] | tuple[type[Any], ...]
@@ -1016,3 +1031,6 @@ def _collect_bases_data(bases: tuple[type[Any], ...]) -> tuple[set[str], set[str
             class_vars.update(base.__class_vars__)
             private_attributes.update(base.__private_attributes__)
     return field_names, class_vars, private_attributes
+
+
+__getattr__ = getattr_migration(__name__)
