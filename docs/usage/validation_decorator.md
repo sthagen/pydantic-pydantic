@@ -43,8 +43,8 @@ except ValidationError as exc:
 ## Argument Types
 
 Argument types are inferred from type annotations on the function, arguments without a type decorator are considered
-as `Any`. All types listed in [types](types.md) can be validated, including *pydantic* models and
-[custom types](types.md#custom-data-types).
+as `Any`. All types listed in [types](types/types.md) can be validated, including *pydantic* models and
+[custom types](types/types.md#custom-data-types).
 As with the rest of *pydantic*, types can be coerced by the decorator before they're passed to the actual function:
 
 ```py test="no-print-intercept"
@@ -241,14 +241,6 @@ The `validate_call` decorator should work "out of the box" with [mypy](http://my
 defined to return a function with the same signature as the function it decorates. The only limitation is that
 since we trick mypy into thinking the function returned by the decorator is the same as the function being
 decorated; access to the [raw function](#raw-function) or other attributes will require `type: ignore`.
-
-## Validate without calling the function
-
-By default, arguments validation is done by directly calling the decorated function with parameters.
-But what if you wanted to validate them without *actually* calling the function?
-To do that you can call the `validate` method bound to the decorated function.
-
-**TODO** this no longer exists.
 
 ## Raw function
 
