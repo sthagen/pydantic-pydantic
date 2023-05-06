@@ -33,7 +33,8 @@ from uuid import UUID
 import annotated_types
 import pytest
 from dirty_equals import HasRepr, IsStr
-from pydantic_core._pydantic_core import PydanticCustomError, SchemaError
+from pydantic_core import PydanticCustomError, SchemaError, core_schema
+from pydantic_core.core_schema import ValidationInfo
 from typing_extensions import Annotated, Literal, TypedDict
 
 from pydantic import (
@@ -41,8 +42,9 @@ from pydantic import (
     UUID3,
     UUID4,
     UUID5,
-    AnalyzedType,
     AwareDatetime,
+    Base64Bytes,
+    Base64Str,
     BaseModel,
     ByteSize,
     ConfigDict,
@@ -73,6 +75,7 @@ from pydantic import (
     StrictFloat,
     StrictInt,
     StrictStr,
+    TypeAdapter,
     ValidationError,
     conbytes,
     condate,
@@ -85,6 +88,7 @@ from pydantic import (
     constr,
 )
 from pydantic.decorators import field_validator
+from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
 from pydantic.types import AllowInfNan, ImportString, SecretField, Strict
 
 try:
@@ -125,8 +129,8 @@ def test_strict_raw_type():
 def test_constrained_bytes_too_long(ConBytesModel):
     with pytest.raises(ValidationError) as exc_info:
         ConBytesModel(v=b'this is too long')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'bytes_too_long',
             'loc': ('v',),
@@ -207,8 +211,8 @@ def test_constrained_list_too_long():
 
     with pytest.raises(ValidationError) as exc_info:
         ConListModelMax(v=list(str(i) for i in range(11)))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_long',
             'loc': ('v',),
@@ -225,8 +229,8 @@ def test_constrained_list_too_short():
 
     with pytest.raises(ValidationError) as exc_info:
         ConListModelMin(v=[])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('v',),
@@ -247,8 +251,8 @@ def test_constrained_list_optional():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(req=[], opt=[])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('req',),
@@ -280,8 +284,8 @@ def test_constrained_list_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         ConListModelBoth(v=list(range(6)))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('v',),
@@ -293,8 +297,8 @@ def test_constrained_list_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         ConListModelBoth(v=list(range(12)))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_long',
             'loc': ('v',),
@@ -306,8 +310,8 @@ def test_constrained_list_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         ConListModelBoth(v=1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'list_type', 'loc': ('v',), 'msg': 'Input should be a valid list', 'input': 1}
     ]
 
@@ -318,8 +322,8 @@ def test_constrained_list_item_type_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         ConListModel(v=['a', 'b', 'c'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('v', 0),
@@ -358,8 +362,8 @@ def test_conlist():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=[1, 'x', 'y'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('foo', 1),
@@ -376,8 +380,8 @@ def test_conlist():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'list_type', 'loc': ('foo',), 'msg': 'Input should be a valid list', 'input': 1}
     ]
 
@@ -422,8 +426,8 @@ def test_constrained_set_too_long():
 
     with pytest.raises(ValidationError) as exc_info:
         ConSetModelMax(v={str(i) for i in range(11)})
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_long',
             'loc': ('v',),
@@ -440,8 +444,8 @@ def test_constrained_set_too_short():
 
     with pytest.raises(ValidationError) as exc_info:
         ConSetModelMin(v=[])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('v',),
@@ -462,8 +466,8 @@ def test_constrained_set_optional():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(req=set(), opt=set())
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('req',),
@@ -495,8 +499,8 @@ def test_constrained_set_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         ConSetModelBoth(v=set(range(6)))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('v',),
@@ -508,8 +512,8 @@ def test_constrained_set_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         ConSetModelBoth(v=set(range(12)))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_long',
             'loc': ('v',),
@@ -521,8 +525,8 @@ def test_constrained_set_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         ConSetModelBoth(v=1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'set_type', 'loc': ('v',), 'msg': 'Input should be a valid set', 'input': 1}
     ]
 
@@ -533,8 +537,8 @@ def test_constrained_set_item_type_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         ConSetModel(v=['a', 'b', 'c'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('v', 0),
@@ -573,8 +577,8 @@ def test_conset():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=[1, 'x', 'y'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('foo', 1),
@@ -591,8 +595,8 @@ def test_conset():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'set_type', 'loc': ('foo',), 'msg': 'Input should be a valid set', 'input': 1}
     ]
 
@@ -625,8 +629,8 @@ def test_confrozenset():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=[1, 'x', 'y'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('foo', 1),
@@ -643,8 +647,8 @@ def test_confrozenset():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'frozen_set_type', 'loc': ('foo',), 'msg': 'Input should be a valid frozenset', 'input': 1}
     ]
 
@@ -667,8 +671,8 @@ def test_constrained_frozenset_optional():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(req=frozenset(), opt=frozenset())
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_short',
             'loc': ('req',),
@@ -709,8 +713,8 @@ def test_constrained_str_default(ConStringModel):
 def test_constrained_str_too_long(ConStringModel):
     with pytest.raises(ValidationError) as exc_info:
         ConStringModel(v='this is too long')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_too_long',
             'loc': ('v',),
@@ -759,8 +763,8 @@ def test_constrained_str_max_length_0():
     assert m.v == ''
     with pytest.raises(ValidationError) as exc_info:
         Model(v='qwe')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_too_long',
             'loc': ('v',),
@@ -790,8 +794,8 @@ def test_string_import_callable(annotation):
 
     with pytest.raises(ValidationError) as exc_info:
         PyObjectModel(callable='foobar')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'import_error',
             'loc': ('callable',),
@@ -803,8 +807,8 @@ def test_string_import_callable(annotation):
 
     with pytest.raises(ValidationError) as exc_info:
         PyObjectModel(callable='os.missing')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'import_error',
             'loc': ('callable',),
@@ -816,15 +820,15 @@ def test_string_import_callable(annotation):
 
     with pytest.raises(ValidationError) as exc_info:
         PyObjectModel(callable='os.path')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'callable_type', 'loc': ('callable',), 'msg': 'Input should be callable', 'input': os.path}
     ]
 
     with pytest.raises(ValidationError) as exc_info:
         PyObjectModel(callable=[1, 2, 3])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'callable_type', 'loc': ('callable',), 'msg': 'Input should be callable', 'input': [1, 2, 3]}
     ]
 
@@ -893,7 +897,7 @@ def test_decimal_strict():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=1.23)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'decimal_type',
             'loc': ('v',),
@@ -915,7 +919,7 @@ def test_strict_date():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=datetime(2017, 5, 5))
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'date_type',
             'loc': ('v',),
@@ -926,7 +930,7 @@ def test_strict_date():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='2017-05-05')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'date_type',
             'loc': ('v',),
@@ -944,7 +948,7 @@ def test_strict_datetime():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=date(2017, 5, 5))
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'datetime_type',
             'loc': ('v',),
@@ -955,7 +959,7 @@ def test_strict_datetime():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='2017-05-05T10:10:10')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'datetime_type',
             'loc': ('v',),
@@ -973,7 +977,7 @@ def test_strict_time():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='10:10:10')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'time_type',
             'loc': ('v',),
@@ -991,7 +995,7 @@ def test_strict_timedelta():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='1 days')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'time_delta_type',
             'loc': ('v',),
@@ -1235,8 +1239,8 @@ def str_model_fixture():
 def test_string_too_long(StrModel):
     with pytest.raises(ValidationError) as exc_info:
         StrModel(str_check='x' * 150)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_too_long',
             'loc': ('str_check',),
@@ -1250,8 +1254,8 @@ def test_string_too_long(StrModel):
 def test_string_too_short(StrModel):
     with pytest.raises(ValidationError) as exc_info:
         StrModel(str_check='x')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_too_short',
             'loc': ('str_check',),
@@ -1284,8 +1288,8 @@ def test_datetime_successful(DatetimeModel):
 def test_datetime_errors(DatetimeModel):
     with pytest.raises(ValueError) as exc_info:
         DatetimeModel(dt='2017-13-05T19:47:07', date_='XX1494012000', time_='25:20:30.400', duration='15:30.0001broken')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'datetime_parsing',
             'loc': ('dt',),
@@ -1346,8 +1350,8 @@ def test_enum_fails(cooking_model):
     FruitEnum, ToolEnum, CookingModel = cooking_model
     with pytest.raises(ValueError) as exc_info:
         CookingModel(tool=3)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'expected': '1 or 2'},
             'input': 3,
@@ -1375,10 +1379,10 @@ def test_plain_enum_validate():
     m = Model(x=MyEnum.a)
     assert m.x is MyEnum.a
 
-    assert AnalyzedType(MyEnum).validate_python(1) is MyEnum.a
+    assert TypeAdapter(MyEnum).validate_python(1) is MyEnum.a
     with pytest.raises(ValidationError) as exc_info:
-        AnalyzedType(MyEnum).validate_python(1, strict=True)
-    assert exc_info.value.errors() == [
+        TypeAdapter(MyEnum).validate_python(1, strict=True)
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'class': 'test_plain_enum_validate.<locals>.MyEnum'},
             'input': 1,
@@ -1388,11 +1392,11 @@ def test_plain_enum_validate():
         }
     ]
 
-    assert AnalyzedType(MyEnum).validate_json('1') is MyEnum.a
-    AnalyzedType(MyEnum).validate_json('1', strict=True)
+    assert TypeAdapter(MyEnum).validate_json('1') is MyEnum.a
+    TypeAdapter(MyEnum).validate_json('1', strict=True)
     with pytest.raises(ValidationError) as exc_info:
-        AnalyzedType(MyEnum).validate_json('"1"', strict=True)
-    assert exc_info.value.errors() == [
+        TypeAdapter(MyEnum).validate_json('"1"', strict=True)
+    assert exc_info.value.errors(include_url=False) == [
         {'ctx': {'expected': '1'}, 'input': '1', 'loc': (), 'msg': 'Input should be 1', 'type': 'enum'}
     ]
 
@@ -1422,7 +1426,7 @@ def test_enum_type():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(my_enum=1)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'class': 'Enum'},
             'input': 1,
@@ -1456,7 +1460,7 @@ def test_int_enum_type():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(my_enum=MyEnum.a)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'class': 'IntEnum'},
             'input': MyEnum.a,
@@ -1491,7 +1495,7 @@ def test_enum_from_json(enum_base, strict):
     MyEnum.__name__ if sys.version_info[:2] <= (3, 8) else MyEnum.__qualname__
 
     if strict:
-        assert exc_info.value.errors() == [
+        assert exc_info.value.errors(include_url=False) == [
             {
                 'ctx': {'expected': '1 or 3'},
                 'input': 2,
@@ -1501,7 +1505,7 @@ def test_enum_from_json(enum_base, strict):
             }
         ]
     else:
-        assert exc_info.value.errors() == [
+        assert exc_info.value.errors(include_url=False) == [
             {
                 'ctx': {'expected': '1 or 3'},
                 'input': 2,
@@ -1537,7 +1541,9 @@ def test_invalid_schema_constraints(kwargs, type_):
 
 
 def test_invalid_decimal_constraint():
-    with pytest.raises(TypeError, match="'max_length' is not a valid constraint for DecimalValidator"):
+    with pytest.raises(
+        TypeError, match="The following constraints cannot be applied to <class 'decimal.Decimal'>: 'max_length'"
+    ):
 
         class Foo(BaseModel):
             a: Decimal = Field('foo', title='A title', description='A description', max_length=5)
@@ -1586,8 +1592,8 @@ def test_string_fails():
             str_email='foobar<@example.com',
             name_email='foobar @example.com',
         )
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_pattern_mismatch',
             'loc': ('str_regex',),
@@ -1648,8 +1654,8 @@ def test_dict():
     assert Model(v={1: 10, 2: 20}).v == {1: 10, 2: 20}
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[(1, 2), (3, 4)])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'dict_type',
             'loc': ('v',),
@@ -1660,8 +1666,8 @@ def test_dict():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[1, 2, 3])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'dict_type', 'loc': ('v',), 'msg': 'Input should be a valid dictionary', 'input': [1, 2, 3]}
     ]
 
@@ -1689,8 +1695,8 @@ def test_list_fails(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'list_type',
             'loc': ('v',),
@@ -1709,8 +1715,8 @@ def test_ordered_dict():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[1, 2, 3])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'dict_type', 'loc': ('v',), 'msg': 'Input should be a valid dictionary', 'input': [1, 2, 3]}
     ]
 
@@ -1738,8 +1744,8 @@ def test_tuple_fails(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'tuple_type', 'loc': ('v',), 'msg': 'Input should be a valid tuple', 'input': value}
     ]
 
@@ -1801,7 +1807,7 @@ def test_tuple_variable_len_fails(value, cls, exc):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    assert exc_info.value.errors() == exc
+    assert exc_info.value.errors(include_url=False) == exc
 
 
 @pytest.mark.parametrize(
@@ -1827,8 +1833,8 @@ def test_set_fails(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'set_type', 'loc': ('v',), 'msg': 'Input should be a valid set', 'input': value}
     ]
 
@@ -1839,8 +1845,8 @@ def test_list_type_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='123')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'list_type', 'loc': ('v',), 'msg': 'Input should be a valid list', 'input': '123'}
     ]
 
@@ -1851,8 +1857,8 @@ def test_set_type_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='123')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'set_type', 'loc': ('v',), 'msg': 'Input should be a valid set', 'input': '123'}
     ]
 
@@ -1909,8 +1915,8 @@ def test_infinite_iterable_int():
     m = Model(it=str_iterable())
     with pytest.raises(ValidationError) as exc_info:
         next(m.it)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': (0,),
@@ -1940,8 +1946,8 @@ def test_iterable_any(type_annotation):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(it=3)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'iterable_type', 'loc': ('it',), 'msg': 'Input should be iterable', 'input': 3}
     ]
 
@@ -1952,8 +1958,8 @@ def test_invalid_iterable():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(it=3)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'iterable_type', 'loc': ('it',), 'msg': 'Input should be iterable', 'input': 3}
     ]
 
@@ -1980,8 +1986,8 @@ def test_infinite_iterable_validate_first():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(it=str_iterable(), b=3)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('it', 0),
@@ -1998,8 +2004,8 @@ def test_sequence_generator_fails():
     gen = (i for i in [1, 2, 3])
     with pytest.raises(ValidationError) as exc_info:
         Model(v=gen)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'is_instance_of',
             'loc': ('v',),
@@ -2125,7 +2131,7 @@ def test_sequence_fails(cls, value, errors):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    assert exc_info.value.errors() == errors
+    assert exc_info.value.errors(include_url=False) == errors
 
 
 def test_int_validation():
@@ -2143,8 +2149,8 @@ def test_int_validation():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=-5, b=5, c=-5, d=5, e=-5, f=11, g=42)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'greater_than',
             'loc': ('a',),
@@ -2216,8 +2222,8 @@ def test_float_validation():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=-5.1, b=5.2, c=-5.1, d=5.1, e=-5.3, f=9.91, g=4.2, h=float('nan'))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'greater_than',
             'loc': ('a',),
@@ -2307,8 +2313,8 @@ def test_finite_float_validation_error(value):
     assert Model(a=42).a == 42
     with pytest.raises(ValidationError) as exc_info:
         Model(a=value)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'finite_number',
             'loc': ('a',),
@@ -2327,8 +2333,8 @@ def test_finite_float_config():
     assert Model(a=42).a == 42
     with pytest.raises(ValidationError) as exc_info:
         Model(a=float('nan'))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'finite_number',
             'loc': ('a',),
@@ -2458,7 +2464,7 @@ def test_bool_unhashable_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v={})
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'bool_type', 'loc': ('v',), 'msg': 'Input should be a valid boolean', 'input': {}}
     ]
 
@@ -2469,8 +2475,8 @@ def test_uuid_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='ebcdab58-6eb8-46fb-a190-d07a3')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'uuid_type',
             'loc': ('v',),
@@ -2512,8 +2518,8 @@ def test_uuid_validation():
 
     with pytest.raises(ValidationError) as exc_info:
         UUIDModel(a=d, b=c, c=b, d=a)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'uuid_version',
             'loc': ('a',),
@@ -2561,7 +2567,7 @@ def test_uuid_strict() -> None:
 
     with pytest.raises(ValidationError) as exc_info:
         UUIDModel(a=str(a), b=str(b), c=str(c), d=str(d))
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'is_instance_of',
             'loc': ('a',),
@@ -2860,9 +2866,9 @@ def test_decimal_validation(mode, type_args, value, result):
         with pytest.raises(ValidationError) as exc_info:
             m = Model(foo=value)
             print(f'unexpected result: {m!r}')
-        # debug(exc_info.value.errors())
+        # debug(exc_info.value.errors(include_url=False))
         # dirty_equals.AnyThing() doesn't work with Decimal on PyPy, hence this hack
-        errors = exc_info.value.errors()
+        errors = exc_info.value.errors(include_url=False)
         if result[0].get('input') is ANY_THING:
             for e in errors:
                 e['input'] = ANY_THING
@@ -2959,8 +2965,8 @@ def test_path_validation_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=123)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'path_type', 'loc': ('foo',), 'msg': 'Input is not a valid path', 'input': 123}
     ]
 
@@ -2973,8 +2979,8 @@ def test_path_validation_strict():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo='/test/path')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'is_instance_of',
             'loc': ('foo',),
@@ -3005,7 +3011,7 @@ def test_file_path_validation_fails(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=value)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'path_not_file',
             'loc': ('foo',),
@@ -3032,7 +3038,7 @@ def test_directory_path_validation_fails(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(foo=value)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'path_not_directory',
             'loc': ('foo',),
@@ -3050,8 +3056,8 @@ def test_number_gt():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=-1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'greater_than',
             'loc': ('a',),
@@ -3070,8 +3076,8 @@ def test_number_ge():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=-1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'greater_than_equal',
             'loc': ('a',),
@@ -3090,8 +3096,8 @@ def test_number_lt():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=5)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'less_than',
             'loc': ('a',),
@@ -3110,8 +3116,8 @@ def test_number_le():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=6)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'less_than_equal',
             'loc': ('a',),
@@ -3137,8 +3143,8 @@ def test_number_multiple_of_int_invalid(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=value)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'multiple_of',
             'loc': ('a',),
@@ -3164,8 +3170,8 @@ def test_number_multiple_of_float_invalid(value):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=value)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'multiple_of',
             'loc': ('a',),
@@ -3202,8 +3208,8 @@ def test_new_type_fails():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foo', b='bar', c=['foo'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('a',),
@@ -3251,8 +3257,8 @@ def test_invalid_simple_json(gen_type):
     obj = '{a: 1, b: [2, 3]}'
     with pytest.raises(ValidationError) as exc_info:
         JsonModel(json_obj=obj)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'json_invalid',
             'loc': ('json_obj',),
@@ -3284,8 +3290,8 @@ def test_valid_detailed_json():
     obj = '(1, 2, 3)'
     with pytest.raises(ValidationError) as exc_info:
         JsonDetailedModel(json_obj=obj)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'json_invalid',
             'loc': ('json_obj',),
@@ -3323,8 +3329,8 @@ def test_invalid_model_json():
     with pytest.raises(ValidationError) as exc_info:
         JsonDetailedModel(json_obj=obj)
 
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'missing', 'loc': ('json_obj', 'b'), 'msg': 'Field required', 'input': {'a': 1, 'c': [2, 3]}}
     ]
 
@@ -3336,8 +3342,8 @@ def test_invalid_detailed_json_type_error():
     obj = '["a", "b", "c"]'
     with pytest.raises(ValidationError) as exc_info:
         JsonDetailedModel(json_obj=obj)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('json_obj', 0),
@@ -3366,8 +3372,8 @@ def test_json_not_str():
     obj = 12
     with pytest.raises(ValidationError) as exc_info:
         JsonDetailedModel(json_obj=obj)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'json_type',
             'loc': ('json_obj',),
@@ -3414,8 +3420,8 @@ def test_json_optional_complex():
 
     with pytest.raises(ValidationError) as exc_info:
         JsonOptionalModel(json_obj='["i should fail"]')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('json_obj', 0),
@@ -3467,8 +3473,8 @@ def test_pattern_error(pattern_type):
 
     with pytest.raises(ValidationError) as exc_info:
         Foobar(pattern='[xx')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'pattern_regex',
             'loc': ('pattern',),
@@ -3582,8 +3588,8 @@ def test_secretstr_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Foobar(password=[6, 23, 'abc'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_type',
             'loc': ('password',),
@@ -3600,8 +3606,8 @@ def test_secret_str_min_max_length():
     with pytest.raises(ValidationError) as exc_info:
         Foobar(password='')
 
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_too_short',
             'loc': ('password',),
@@ -3614,8 +3620,8 @@ def test_secret_str_min_max_length():
     with pytest.raises(ValidationError) as exc_info:
         Foobar(password='1' * 20)
 
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'string_too_long',
             'loc': ('password',),
@@ -3683,8 +3689,8 @@ def test_secretbytes_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Foobar(password=[6, 23, 'abc'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'bytes_type',
             'loc': ('password',),
@@ -3701,8 +3707,8 @@ def test_secret_bytes_min_max_length():
     with pytest.raises(ValidationError) as exc_info:
         Foobar(password=b'')
 
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'bytes_too_short',
             'loc': ('password',),
@@ -3715,8 +3721,8 @@ def test_secret_bytes_min_max_length():
     with pytest.raises(ValidationError) as exc_info:
         Foobar(password=b'1' * 20)
 
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'bytes_too_long',
             'loc': ('password',),
@@ -3748,8 +3754,8 @@ def test_generic_without_params_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(generic_list=0, generic_dict=0, generic_tuple=0)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'list_type',
             'loc': ('generic_list',),
@@ -3773,8 +3779,8 @@ def test_literal_single():
     Model(a='a')
     with pytest.raises(ValidationError) as exc_info:
         Model(a='b')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'literal_error',
             'loc': ('a',),
@@ -3793,8 +3799,8 @@ def test_literal_multiple():
     Model(a_or_b='b')
     with pytest.raises(ValidationError) as exc_info:
         Model(a_or_b='c')
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'literal_error',
             'loc': ('a_or_b',),
@@ -4035,9 +4041,9 @@ def test_deque_fails(cls, value, expected_error):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    # debug(exc_info.value.errors())
-    assert len(exc_info.value.errors()) == 1
-    assert expected_error == exc_info.value.errors()[0]
+    # debug(exc_info.value.errors(include_url=False))
+    assert len(exc_info.value.errors(include_url=False)) == 1
+    assert expected_error == exc_info.value.errors(include_url=False)[0]
 
 
 def test_deque_model():
@@ -4136,8 +4142,8 @@ def test_none(value_type):
             my_none_dict={'a': 1, 'b': None},
             my_json_none='"a"',
         )
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'none_required', 'loc': ('my_none',), 'msg': 'Input should be None', 'input': 'qwe'},
         {'type': 'none_required', 'loc': ('my_none_list', 0), 'msg': 'Input should be None', 'input': 1},
         {
@@ -4189,8 +4195,8 @@ def test_none_literal():
             my_none_dict={'a': 1, 'b': None},
             my_json_none='"a"',
         )
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'literal_error',
             'loc': ('my_none',),
@@ -4283,8 +4289,8 @@ def test_union_compound_types():
     assert Model(values={'x': ('pika',)}).model_dump() == {'values': {'x': ['pika']}}
     with pytest.raises(ValidationError) as e:
         Model(values={'x': {'a': 'b'}})
-    # insert_assert(e.value.errors())
-    assert e.value.errors() == [
+    # insert_assert(e.value.errors(include_url=False))
+    assert e.value.errors(include_url=False) == [
         {
             'type': 'string_type',
             'loc': ('values', 'dict[str,str]', 'x'),
@@ -4343,7 +4349,7 @@ def test_custom_generic_containers():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(field=['a'])
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': 'a',
             'loc': ('field', 0),
@@ -4351,3 +4357,187 @@ def test_custom_generic_containers():
             'type': 'int_parsing',
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ('field_type', 'input_data', 'expected_value', 'serialized_data'),
+    [
+        pytest.param(Base64Bytes, b'Zm9vIGJhcg==\n', b'foo bar', b'Zm9vIGJhcg==\n', id='Base64Bytes-reversible'),
+        pytest.param(Base64Str, 'Zm9vIGJhcg==\n', 'foo bar', 'Zm9vIGJhcg==\n', id='Base64Str-reversible'),
+        pytest.param(Base64Bytes, b'Zm9vIGJhcg==', b'foo bar', b'Zm9vIGJhcg==\n', id='Base64Bytes-bytes-input'),
+        pytest.param(Base64Bytes, 'Zm9vIGJhcg==', b'foo bar', b'Zm9vIGJhcg==\n', id='Base64Bytes-str-input'),
+        pytest.param(
+            Base64Bytes, bytearray(b'Zm9vIGJhcg=='), b'foo bar', b'Zm9vIGJhcg==\n', id='Base64Bytes-bytearray-input'
+        ),
+        pytest.param(Base64Str, b'Zm9vIGJhcg==', 'foo bar', 'Zm9vIGJhcg==\n', id='Base64Str-bytes-input'),
+        pytest.param(Base64Str, 'Zm9vIGJhcg==', 'foo bar', 'Zm9vIGJhcg==\n', id='Base64Str-str-input'),
+        pytest.param(
+            Base64Str, bytearray(b'Zm9vIGJhcg=='), 'foo bar', 'Zm9vIGJhcg==\n', id='Base64Str-bytearray-input'
+        ),
+    ],
+)
+def test_base64(field_type, input_data, expected_value, serialized_data):
+    class Model(BaseModel):
+        base64_value: field_type
+        base64_value_or_none: Optional[field_type] = None
+
+    m = Model(base64_value=input_data)
+    assert m.base64_value == expected_value
+
+    m = Model.model_construct(base64_value=expected_value)
+    assert m.base64_value == expected_value
+
+    assert m.model_dump() == {
+        'base64_value': serialized_data,
+        'base64_value_or_none': None,
+    }
+
+    assert Model.model_json_schema() == {
+        'properties': {
+            'base64_value': {
+                'format': 'base64',
+                'title': 'Base64 Value',
+                'type': 'string',
+            },
+            'base64_value_or_none': {
+                'anyOf': [{'type': 'string', 'format': 'base64'}, {'type': 'null'}],
+                'default': None,
+                'title': 'Base64 Value Or None',
+            },
+        },
+        'required': ['base64_value'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    ('field_type', 'input_data'),
+    [
+        pytest.param(Base64Bytes, b'Zm9vIGJhcg', id='Base64Bytes-invalid-base64-bytes'),
+        pytest.param(Base64Bytes, 'Zm9vIGJhcg', id='Base64Bytes-invalid-base64-str'),
+        pytest.param(Base64Str, b'Zm9vIGJhcg', id='Base64Str-invalid-base64-bytes'),
+        pytest.param(Base64Str, 'Zm9vIGJhcg', id='Base64Str-invalid-base64-str'),
+    ],
+)
+def test_base64_invalid(field_type, input_data):
+    class Model(BaseModel):
+        base64_value: field_type
+
+    with pytest.raises(ValidationError) as e:
+        Model(base64_value=input_data)
+
+    assert e.value.errors(include_url=False) == [
+        {
+            'ctx': {'error': 'Incorrect padding'},
+            'input': input_data,
+            'loc': ('base64_value',),
+            'msg': "Base64 decoding error: 'Incorrect padding'",
+            'type': 'base64_decode',
+        },
+    ]
+
+
+def test_third_party_type_integration():
+    """
+    The purpose of this test is to demonstrate how a third party type can be integrated with pydantic
+    without making any modifications to the underlying type.
+    """
+
+    class ThirdPartyType:
+        """
+        This is meant to represent a type from a third party library that wasn't designed with pydantic
+        integration in mind, and so doesn't have a pydantic_core.CoreSchema or anything.
+        """
+
+        x: int
+
+        def __init__(self):
+            self.x = 0
+
+    class _ThirdPartyTypePydanticAnnotation:
+        @classmethod
+        def __get_pydantic_core_schema__(
+            cls, _source_type: Any, _handler: Callable[[Any], core_schema.CoreSchema]
+        ) -> core_schema.CoreSchema:
+            """
+            We return a pydantic_core.CoreSchema that behaves in the following ways:
+            * ints will be parsed as ThirdPartyType instances with the int as the x attribute
+            * ThirdPartyType instances will be parsed as ThirdPartyType instances without any changes
+            * Nothing else will pass validation
+            * Serialization will always return just an int
+            """
+
+            def validate_from_int(value: int, _validation_info: Optional[ValidationInfo] = None) -> ThirdPartyType:
+                result = ThirdPartyType()
+                result.x = value
+                return result
+
+            instance_validation_schema = core_schema.is_instance_schema(
+                ThirdPartyType,
+                json_function=validate_from_int,
+            )
+            int_validation_schema = core_schema.chain_schema(
+                [core_schema.int_schema(), core_schema.general_plain_validator_function(validate_from_int)]
+            )
+            return core_schema.union_schema(
+                [instance_validation_schema, int_validation_schema],
+                serialization=core_schema.plain_serializer_function_ser_schema(lambda instance: instance.x),
+            )
+
+        @classmethod
+        def __get_pydantic_json_schema__(
+            cls, _core_schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler
+        ) -> JsonSchemaValue:
+            # Use the same schema that would be used for `int`
+            return handler(core_schema.int_schema())
+
+    # We now create an Annotated wrapper that we'll use as the annotation for fields on BaseModels etc.
+    PydanticThirdPartyType = Annotated[ThirdPartyType, _ThirdPartyTypePydanticAnnotation]
+
+    # Create a model class that uses this annotation as a field
+    class Model(BaseModel):
+        third_party_type: PydanticThirdPartyType
+
+    # Demonstrate that this field is handled correctly, that ints are parsed into ThirdPartyType, and that
+    # these instances are also "dumped" directly into ints as expected.
+    m_int = Model(third_party_type=1)
+    assert isinstance(m_int.third_party_type, ThirdPartyType)
+    assert m_int.third_party_type.x == 1
+    assert m_int.model_dump() == {'third_party_type': 1}
+
+    # Do the same thing where an instance of ThirdPartyType is passed in
+    instance = ThirdPartyType()
+    assert instance.x == 0
+    instance.x = 10
+
+    m_instance = Model(third_party_type=instance)
+    assert isinstance(m_instance.third_party_type, ThirdPartyType)
+    assert m_instance.third_party_type.x == 10
+    assert m_instance.model_dump() == {'third_party_type': 10}
+
+    # Demonstrate that validation errors are raised as expected for invalid inputs
+    with pytest.raises(ValidationError) as exc_info:
+        Model(third_party_type='a')
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'ctx': {'class': 'test_third_party_type_integration.<locals>.ThirdPartyType'},
+            'input': 'a',
+            'loc': ('third_party_type', 'is-instance[test_third_party_type_integration.<locals>.ThirdPartyType]'),
+            'msg': 'Input should be an instance of test_third_party_type_integration.<locals>.ThirdPartyType',
+            'type': 'is_instance_of',
+        },
+        {
+            'input': 'a',
+            'loc': ('third_party_type', 'chain[int,function-plain[validate_from_int()]]'),
+            'msg': 'Input should be a valid integer, unable to parse string as an ' 'integer',
+            'type': 'int_parsing',
+        },
+    ]
+
+    assert Model.model_json_schema() == {
+        'properties': {'third_party_type': {'title': 'Third Party Type', 'type': 'integer'}},
+        'required': ['third_party_type'],
+        'title': 'Model',
+        'type': 'object',
+    }

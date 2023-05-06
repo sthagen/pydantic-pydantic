@@ -57,8 +57,8 @@ classifiers = [
 requires-python = '>=3.7'
 dependencies = [
     'typing-extensions>=4.5.0',
-    'pydantic-core==0.27.0',
     'annotated-types>=0.4.0',
+    "pydantic-core==0.30.0",
 ]
 dynamic = ['version', 'readme']
 
@@ -71,6 +71,7 @@ email = ['email-validator>=2.0.0']
 docs = [
     "autoflake",
     "mkdocs",
+    "mkdocs-embed-external-markdown",
     "mkdocs-exclude",
     "mkdocs-material",
     "mkdocs-redirects",
@@ -78,10 +79,13 @@ docs = [
     "mkdocstrings-python",
     "tomli",
     "pyupgrade",
+    "mike @ git+https://github.com/jimporter/mike.git",
+    "mkdocs-embed-external-markdown>=2.3.0",
+    "black>=23.3.0",
+    "pytest-examples>=0.0.9",
 ]
 linting = [
     "black",
-    "hypothesis",
     "ruff",
     "mypy~=1.1.1",
 ]
@@ -89,7 +93,6 @@ testing-extra = [
     # used when generate devtools docs example
     "ansi2html",
     "devtools",
-    "hypothesis",
     # used in docs tests
     "sqlalchemy==1.4.0",
 ]
@@ -145,7 +148,7 @@ filterwarnings = [
 
 # configuring https://github.com/pydantic/hooky
 [tool.hooky]
-reviewers = ['samuelcolvin', 'adriangb', 'dmontagu', 'hramezani', 'Kludex']
+reviewers = ['samuelcolvin', 'adriangb', 'dmontagu', 'hramezani']
 require_change_file = false
 
 [tool.ruff]

@@ -2,6 +2,12 @@
 description: Support for iterable types.
 ---
 
+`typing.Sequence`
+: see [Typing Iterables](#typing-iterables) below for more detail on parsing and validation
+
+`typing.Iterable`
+: this is reserved for iterables that shouldn't be consumed. See [Infinite Generators](#infinite-generators) below for more detail on parsing and validation
+
 *pydantic* uses standard library `typing` types as defined in PEP 484 to define complex objects.
 
 ```py
@@ -57,6 +63,53 @@ print(Model(sequence_of_ints=(1, 2, 3, 4)).sequence_of_ints)
 print(Model(deque=[1, 2, 3]).deque)
 #> deque([1, 2, 3])
 ```
+
+### Strings aren't Sequences
+
+
+*pydantic* doesn't treat strings, i.e. `str` and `bytes` subclasses, as sequences:
+
+```py
+from typing import Optional, Sequence
+
+from pydantic import BaseModel, ValidationError
+
+
+class Model(BaseModel):
+    sequence_of_strs: Optional[Sequence[str]] = None
+    sequence_of_bytes: Optional[Sequence[bytes]] = None
+
+
+print(Model(sequence_of_strs=['a', 'bc']).sequence_of_strs)
+#> ['a', 'bc']
+print(Model(sequence_of_strs=('a', 'bc')).sequence_of_strs)
+#> ('a', 'bc')
+print(Model(sequence_of_bytes=[b'a', b'bc']).sequence_of_bytes)
+#> [b'a', b'bc']
+print(Model(sequence_of_bytes=(b'a', b'bc')).sequence_of_bytes)
+#> (b'a', b'bc')
+
+
+try:
+    Model(sequence_of_strs='abc')
+except ValidationError as e:
+    print(e)
+    """
+    1 validation error for Model
+    sequence_of_strs
+      'str' instances are not allowed as a Sequence value [type=sequence_str, input_value='abc', input_type=str]
+    """
+try:
+    Model(sequence_of_bytes=b'abc')
+except ValidationError as e:
+    print(e)
+    """
+    1 validation error for Model
+    sequence_of_bytes
+      'bytes' instances are not allowed as a Sequence value [type=sequence_str, input_value=b'abc', input_type=bytes]
+    """
+```
+
 
 ## Infinite Generators
 

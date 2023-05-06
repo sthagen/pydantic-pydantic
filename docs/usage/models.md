@@ -469,6 +469,7 @@ except ValidationError as e:
                 'recursive_model': {'lat': 4.2, 'lng': 'New York'},
                 'gt_int': 21,
             },
+            'url': 'https://errors.pydantic.dev/2/v/missing',
         },
         {
             'type': 'greater_than',
@@ -476,24 +477,28 @@ except ValidationError as e:
             'msg': 'Input should be greater than 42',
             'input': 21,
             'ctx': {'gt': 42},
+            'url': 'https://errors.pydantic.dev/2/v/greater_than',
         },
         {
             'type': 'int_parsing',
             'loc': ('list_of_ints', 2),
             'msg': 'Input should be a valid integer, unable to parse string as an integer',
             'input': 'bad',
+            'url': 'https://errors.pydantic.dev/2/v/int_parsing',
         },
         {
             'type': 'float_parsing',
             'loc': ('a_float',),
             'msg': 'Input should be a valid number, unable to parse string as an number',
             'input': 'not a float',
+            'url': 'https://errors.pydantic.dev/2/v/float_parsing',
         },
         {
             'type': 'float_parsing',
             'loc': ('recursive_model', 'lng'),
             'msg': 'Input should be a valid number, unable to parse string as an number',
             'input': 'New York',
+            'url': 'https://errors.pydantic.dev/2/v/float_parsing',
         },
     ]
     """
@@ -532,6 +537,7 @@ except ValidationError as e:
             'msg': 'Value error, value must be "bar"',
             'input': 'ber',
             'ctx': {'error': 'value must be "bar"'},
+            'url': 'https://errors.pydantic.dev/2/v/value_error',
         }
     ]
     """
@@ -989,14 +995,14 @@ except ValidationError as e:
 You may have types that are not `BaseModel`s that you want to validate data against.
 Or you may want to validate a `List[SomeModel]`, or dump it to JSON.
 
-To do this Pydantic provides `AnalyzedType`. An `AnalyzedType` instance behaves nearly the same as a `BaseModel` instance, with the difference that `AnalyzedType` is not an actual type so you cannot use it in type annotations and such.
+To do this Pydantic provides `TypeAdapter`. A `TypeAdapter` instance behaves nearly the same as a `BaseModel` instance, with the difference that `TypeAdapter` is not an actual type so you cannot use it in type annotations and such.
 
 ```py
 from typing import List
 
 from typing_extensions import TypedDict
 
-from pydantic import AnalyzedType, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 
 class User(TypedDict):
@@ -1004,7 +1010,7 @@ class User(TypedDict):
     id: int
 
 
-UserListValidator = AnalyzedType(List[User])
+UserListValidator = TypeAdapter(List[User])
 print(repr(UserListValidator.validate_python([{'name': 'Fred', 'id': '3'}])))
 #> [{'name': 'Fred', 'id': 3}]
 
@@ -1021,7 +1027,7 @@ except ValidationError as e:
     """
 ```
 
-For many use cases `AnalyzedType` can replace BaseModels with a `__root__` field in Pydantic V1.
+For many use cases `TypeAdapter` can replace BaseModels with a `__root__` field in Pydantic V1.
 
 ## Custom Root Types
 
@@ -1514,3 +1520,38 @@ match a:
 !!! note
     A match-case statement may seem as if it creates a new model, but don't be fooled;
     it is just syntactic sugar for getting an attribute and either comparing it or declaring and initializing it.
+
+## Attribute copies
+
+In many cases arguments passed to the constructor will be copied in order to perform validation and, where necessary, coercion. When constructing classes with data attributes, Pydantic copies the attributes in order to efficiently iterate over its elements for validation.
+
+In this example, note that the ID of the list changes after the class is constructed because it has been copied for validation.
+
+```py
+from typing import List
+
+from pydantic import BaseModel
+
+
+class C1:
+    arr = []
+
+    def __init__(self, in_arr):
+        self.arr = in_arr
+
+
+class C2(BaseModel):
+    arr: List[int]
+
+
+arr_orig = [1, 9, 10, 3]
+
+
+c1 = C1(arr_orig)
+c2 = C2(arr=arr_orig)
+print('id(c1.arr) == id(c2.arr)  ', id(c1.arr) == id(c2.arr))
+#> id(c1.arr) == id(c2.arr)   False
+```
+
+!!! note
+    There are some situations where Pydantic does not copy attributes, such as when passing models &mdash; we use the model as is. You can override this behaviour by setting [`config.revalidate_instances='always'`](/api/config/) in your model.

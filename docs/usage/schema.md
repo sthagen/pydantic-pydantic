@@ -702,7 +702,7 @@ This is useful if you need to extend or modify the JSON Schema default definitio
 import json
 
 from pydantic import BaseModel
-from pydantic.analyzed_type import AnalyzedType
+from pydantic.type_adapter import TypeAdapter
 
 
 class Foo(BaseModel):
@@ -714,13 +714,25 @@ class Model(BaseModel):
 
 
 # Default location for OpenAPI
-top_level_schema = AnalyzedType.json_schemas(
-    [AnalyzedType(Model)], ref_template='#/components/schemas/{model}'
+top_level_schema = TypeAdapter.json_schemas(
+    [TypeAdapter(Model)], ref_template='#/components/schemas/{model}'
 )
 print(json.dumps(top_level_schema, indent=2))
 """
 {
   "$defs": {
+    "Model": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/components/schemas/Foo"
+        }
+      },
+      "required": [
+        "a"
+      ],
+      "title": "Model"
+    },
     "Foo": {
       "type": "object",
       "properties": {
@@ -733,18 +745,6 @@ print(json.dumps(top_level_schema, indent=2))
         "a"
       ],
       "title": "Foo"
-    },
-    "Model": {
-      "type": "object",
-      "properties": {
-        "a": {
-          "$ref": "#/components/schemas/Foo"
-        }
-      },
-      "required": [
-        "a"
-      ],
-      "title": "Model"
     }
   }
 }

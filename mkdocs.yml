@@ -59,6 +59,7 @@ nav:
     - Color Types: usage/types/color_types.md
     - Datetimes: usage/types/datetime.md
     - Dicts and Mapping: usage/types/dicts_mapping.md
+    - Encoded Types: usage/types/encoded.md
     - Enums and Choices: usage/types/enums.md
     - File Types: usage/types/file_types.md
     - JSON: usage/types/json.md
@@ -83,10 +84,11 @@ nav:
   - usage/dataclasses.md
   - usage/validation_decorator.md
   - usage/postponed_annotations.md
-  - Errors:
-    - Usage Errors: usage/errors.md
-    - Validation Errors: usage/validation_errors.md
   - usage/conversion_table.md
+  - usage/pydantic_settings.md
+- Error Messages:
+  - Validation Errors: usage/validation_errors.md
+  - Usage Errors: usage/errors.md
 - Integrations:
   - 'Mypy': integrations/mypy.md
   - 'PyCharm': integrations/pycharm.md
@@ -97,13 +99,14 @@ nav:
   - 'Rich': integrations/rich.md
 - Contribute: contributing.md
 - Blog:
+  - blog/pydantic-v2-alpha.md
   - blog/pydantic-v2.md
 - API:
-  - 'pydantic.analyzed_type': api/analyzed_type.md
+  - 'pydantic.alias_generators': api/alias_generators.md
+  - 'pydantic.type_adapter': api/type_adapter.md
   - 'pydantic.color': api/color.md
   - 'pydantic.config': api/config.md
   - 'pydantic.dataclasses': api/dataclasses.md
-  - 'pydantic.validate_call': api/validate_call.md
   - 'pydantic.decorators': api/decorators.md
   - 'pydantic.errors': api/errors.md
   - 'pydantic.fields': api/fields.md
@@ -112,6 +115,7 @@ nav:
   - 'pydantic.mypy': api/mypy.md
   - 'pydantic.networks': api/networks.md
   - 'pydantic.types': api/types.md
+  - 'pydantic.validate_call': api/validate_call.md
   - 'pydantic.version': api/version.md
 
 
@@ -132,7 +136,14 @@ markdown_extensions:
 watch:
 - pydantic
 
+extra:
+  version:
+    provider: mike
+
 plugins:
+- mike:
+    alias_type: symlink
+    canonical_version: latest
 - search
 - exclude:
     glob:
@@ -142,7 +153,9 @@ plugins:
 - mkdocstrings:
     handlers:
       python:
-        path: .
+        paths: [.]
+        options:
+          separate_signature: true
 - mkdocs-simple-hooks:
     hooks:
       on_pre_build: 'docs.plugins.main:on_pre_build'
@@ -158,3 +171,4 @@ plugins:
       'pycharm_plugin.md': 'integrations/pycharm.md'
       'usage/devtools.md': 'integrations/devtools.md'
       'usage/rich.md': 'integrations/rich.md'
+- external-markdown:

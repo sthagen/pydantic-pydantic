@@ -27,11 +27,11 @@ from pydantic_core import PydanticSerializationError, core_schema
 from typing_extensions import Annotated, get_args
 
 from pydantic import (
-    AnalyzedType,
     BaseModel,
     ConfigDict,
     PydanticInvalidForJsonSchema,
     PydanticSchemaGenerationError,
+    TypeAdapter,
     ValidationError,
     constr,
     errors,
@@ -60,8 +60,8 @@ def test_str_bytes():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=None)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'string_type', 'loc': ('v', 'str'), 'msg': 'Input should be a valid string', 'input': None},
         {'type': 'bytes_type', 'loc': ('v', 'bytes'), 'msg': 'Input should be a valid bytes', 'input': None},
     ]
@@ -99,8 +99,8 @@ def test_union_int_str():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=None)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'int_type', 'loc': ('v', 'int'), 'msg': 'Input should be a valid integer', 'input': None},
         {
             'type': 'string_type',
@@ -137,8 +137,8 @@ def test_typed_list():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[1, 'x', 'y'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('v', 1),
@@ -155,8 +155,8 @@ def test_typed_list():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=1)
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'list_type', 'loc': ('v',), 'msg': 'Input should be a valid list', 'input': 1}
     ]
 
@@ -170,8 +170,8 @@ def test_typed_set():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[1, 'x'])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('v', 1),
@@ -241,7 +241,7 @@ def test_typed_dict_error(value, errors):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    assert exc_info.value.errors() == errors
+    assert exc_info.value.errors(include_url=False) == errors
 
 
 def test_dict_key_error():
@@ -252,8 +252,8 @@ def test_dict_key_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v={'foo': 2, '3': '4'})
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('v', 'foo', '[key]'),
@@ -358,8 +358,8 @@ def test_pep585_generic_types(dict_cls, frozenset_cls, list_cls, set_cls, tuple_
 
     with pytest.raises(ValidationError) as exc_info:
         Model(**(default_model_kwargs | {'e3': (1,)}))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'too_long',
             'loc': ('e3',),
@@ -373,8 +373,8 @@ def test_pep585_generic_types(dict_cls, frozenset_cls, list_cls, set_cls, tuple_
 
     with pytest.raises(ValidationError) as exc_info:
         Model(**(default_model_kwargs | {'f1': Type2}))
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'is_subclass_of',
             'loc': ('f1',),
@@ -392,8 +392,8 @@ def test_tuple_length_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[1, 2], w=[1])
-    # insert_assert(exc_info.value.errors())
-    assert exc_info.value.errors() == [
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'missing', 'loc': ('v', 2), 'msg': 'Field required', 'input': [1, 2]},
         {
             'type': 'too_long',
@@ -411,7 +411,7 @@ def test_tuple_invalid():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v='xxx')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'type': 'tuple_type', 'loc': ('v',), 'msg': 'Input should be a valid tuple', 'input': 'xxx'}
     ]
 
@@ -422,7 +422,7 @@ def test_tuple_value_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=['x', 'y', 'x'])
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': 'x',
             'loc': ('v', 0),
@@ -458,7 +458,7 @@ def test_recursive_list():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=['x'])
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': 'x', 'loc': ('v', 0), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
     ]
 
@@ -473,7 +473,7 @@ def test_recursive_list_error():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[{}])
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {}, 'loc': ('v', 0, 'name'), 'msg': 'Field required', 'type': 'missing'}
     ]
 
@@ -487,7 +487,7 @@ def test_list_unions():
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[1, 2, None])
 
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': None, 'loc': ('v', 2, 'int'), 'msg': 'Input should be a valid integer', 'type': 'int_type'},
         {'input': None, 'loc': ('v', 2, 'str'), 'msg': 'Input should be a valid string', 'type': 'string_type'},
     ]
@@ -1046,7 +1046,7 @@ def test_invalid_string_types(value, errors):
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=value)
-    assert exc_info.value.errors() == errors
+    assert exc_info.value.errors(include_url=False) == errors
 
 
 def test_inheritance_config():
@@ -1073,7 +1073,7 @@ def test_partial_inheritance_config():
     Child(a=0, b=0)
     with pytest.raises(ValidationError) as exc_info:
         Child(a=-1, b=0)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'ge': 0},
             'input': -1,
@@ -1085,7 +1085,7 @@ def test_partial_inheritance_config():
 
     with pytest.raises(ValidationError) as exc_info:
         Child(a=0, b=-1)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'ge': 0},
             'input': -1,
@@ -1130,7 +1130,7 @@ def test_string_none():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a=None)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': None, 'loc': ('a',), 'msg': 'Input should be a valid string', 'type': 'string_type'}
     ]
 
@@ -1176,7 +1176,9 @@ def test_optional_required():
 
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [{'input': {}, 'loc': ('bar',), 'msg': 'Field required', 'type': 'missing'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': {}, 'loc': ('bar',), 'msg': 'Field required', 'type': 'missing'}
+    ]
 
 
 @pytest.mark.xfail(reason='items yielded by __get_validators__ are not inspected for valid signatures')
@@ -1218,7 +1220,7 @@ def test_multiple_errors():
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foobar')
 
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
             'loc': ('a', 'int'),
@@ -1235,7 +1237,7 @@ def test_multiple_errors():
             'type': 'decimal_parsing',
             'loc': (
                 'a',
-                'lax-or-strict[lax=function-after[DecimalValidator(allow_inf_nan=False, check_digits=False, strict=False)(), union[is-instance[Decimal],int,float,constrained-str]],strict=custom-error[function-after[DecimalValidator(allow_inf_nan=False, check_digits=False, strict=False)(), is-instance[Decimal]]]]',  # noqa: E501
+                'lax-or-strict[lax=function-after[validate(), union[is-instance[Decimal],int,float,constrained-str]],strict=custom-error[function-after[validate(), is-instance[Decimal]]]]',  # noqa: E501
             ),
             'msg': 'Input should be a valid decimal',
             'input': 'foobar',
@@ -1254,7 +1256,7 @@ def test_validate_default():
 
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {}, 'loc': ('a',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {}, 'loc': ('b',), 'msg': 'Field required', 'type': 'missing'},
     ]
@@ -1313,8 +1315,24 @@ def test_self_recursive():
     assert m.model_dump() == {'sm': {'self': 123}}
 
 
-@pytest.mark.xfail(reason='need to detect and error if you override __init__; need to suggest a migration path')
-def test_nested_init():
+def test_custom_init():
+    class Model(BaseModel):
+        x: int
+
+        def __init__(self, x: int, y: int):
+            if isinstance(y, str):
+                y = len(y)
+            super().__init__(x=x + int(y))
+
+    assert Model(x=1, y=1).x == 2
+    assert Model.model_validate({'x': 1, 'y': 1}).x == 2
+    assert Model.model_validate_json('{"x": 1, "y": 2}').x == 3
+
+    # For documentation purposes: type hints on __init__ are not currently used for validation:
+    assert Model.model_validate({'x': 1, 'y': 'abc'}).x == 4
+
+
+def test_nested_custom_init():
     class NestedModel(BaseModel):
         self: str
         modified_number: int = 1
@@ -1327,12 +1345,6 @@ def test_nested_init():
         self: str
         nest: NestedModel
 
-    # TODO: Do we want any changes to this behavior in v2? (Currently the __init__-override is not called)
-    #   "I guess this should be an error or warning. If you want to do stuff on init, you should use model_post_init"
-    #   https://github.com/pydantic/pydantic/pull/5151#discussion_r1130684097
-    #   -
-    #   I think we can detect and warn/error if you override `__init__`. If we do that,
-    #   we'll need to add a note to the migration guide about it.
     m = TopModel.model_validate(dict(self='Top Model', nest=dict(self='Nested Model', modified_number=0)))
     assert m.self == 'Top Model'
     assert m.nest.self == 'Nested Model'
@@ -1340,15 +1352,21 @@ def test_nested_init():
 
 
 def test_init_inspection():
+    calls = []
+
     class Foobar(BaseModel):
         x: int
 
         def __init__(self, **data) -> None:
             with pytest.raises(AttributeError):
+                calls.append(data)
                 assert self.x
             super().__init__(**data)
 
     Foobar(x=1)
+    Foobar.model_validate({'x': 2})
+    Foobar.model_validate_json('{"x": 3}')
+    assert calls == [{'x': 1}, {'x': 2}, {'x': 3}]
 
 
 def test_type_on_annotation():
@@ -1392,7 +1410,7 @@ def test_assign_type():
     assert Model(v=Child).v().echo() == 'child'
     with pytest.raises(ValidationError) as exc_info:
         Model(v=Different)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'class': 'test_assign_type.<locals>.Parent'},
             'input': HasRepr("<class 'tests.test_edge_cases.test_assign_type.<locals>.Different'>"),
@@ -1411,7 +1429,7 @@ def test_optional_subfields():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foobar')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': 'foobar',
             'loc': ('a',),
@@ -1422,7 +1440,9 @@ def test_optional_subfields():
 
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [{'input': {}, 'loc': ('a',), 'msg': 'Field required', 'type': 'missing'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': {}, 'loc': ('a',), 'msg': 'Field required', 'type': 'missing'}
+    ]
 
     assert Model(a=None).a is None
     assert Model(a=12).a == 12
@@ -1441,7 +1461,7 @@ def test_validated_optional_subfields():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foobar')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': 'foobar',
             'loc': ('a',),
@@ -1452,7 +1472,9 @@ def test_validated_optional_subfields():
 
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [{'input': {}, 'loc': ('a',), 'msg': 'Field required', 'type': 'missing'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': {}, 'loc': ('a',), 'msg': 'Field required', 'type': 'missing'}
+    ]
 
     assert Model(a=None).a is None
     assert Model(a=12).a == 12
@@ -1464,7 +1486,7 @@ def test_optional_field_constraints():
 
     with pytest.raises(ValidationError) as exc_info:
         MyModel(my_int=2)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'ge': 3},
             'input': 2,
@@ -1576,14 +1598,14 @@ def test_type_var_constraint():
     }
     with pytest.raises(ValidationError) as exc_info:
         MyModel(foo=None)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': None, 'loc': ('foo', 'int'), 'msg': 'Input should be a valid integer', 'type': 'int_type'},
         {'input': None, 'loc': ('foo', 'str'), 'msg': 'Input should be a valid string', 'type': 'string_type'},
     ]
 
     with pytest.raises(ValidationError):
         MyModel(foo=[1, 2, 3])
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': None, 'loc': ('foo', 'int'), 'msg': 'Input should be a valid integer', 'type': 'int_type'},
         {'input': None, 'loc': ('foo', 'str'), 'msg': 'Input should be a valid string', 'type': 'string_type'},
     ]
@@ -1606,13 +1628,13 @@ def test_type_var_bound():
     }
     with pytest.raises(ValidationError) as exc_info:
         MyModel(foo=None)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': None, 'loc': ('foo',), 'msg': 'Input should be a valid integer', 'type': 'int_type'}
     ]
 
     with pytest.raises(ValidationError):
         MyModel(foo='x')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': None, 'loc': ('foo',), 'msg': 'Input should be a valid integer', 'type': 'int_type'}
     ]
     assert MyModel(foo=123).foo == 123
@@ -1760,7 +1782,9 @@ def test_optional_validator():
 
     with pytest.raises(ValidationError) as exc_info:
         assert Model().model_dump() == {'something': None}
-    assert exc_info.value.errors() == [{'input': {}, 'loc': ('something',), 'msg': 'Field required', 'type': 'missing'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': {}, 'loc': ('something',), 'msg': 'Field required', 'type': 'missing'}
+    ]
 
     assert Model(something=None).model_dump() == {'something': None}
     assert Model(something='hello').model_dump() == {'something': 'hello'}
@@ -1774,25 +1798,25 @@ def test_required_optional():
 
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {}, 'loc': ('nullable1',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {}, 'loc': ('nullable2',), 'msg': 'Field required', 'type': 'missing'},
     ]
     with pytest.raises(ValidationError) as exc_info:
         Model(nullable1=1)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {'nullable1': 1}, 'loc': ('nullable2',), 'msg': 'Field required', 'type': 'missing'}
     ]
     with pytest.raises(ValidationError) as exc_info:
         Model(nullable2=2)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {'nullable2': 2}, 'loc': ('nullable1',), 'msg': 'Field required', 'type': 'missing'}
     ]
     assert Model(nullable1=None, nullable2=None).model_dump() == {'nullable1': None, 'nullable2': None}
     assert Model(nullable1=1, nullable2=2).model_dump() == {'nullable1': 1, 'nullable2': 2}
     with pytest.raises(ValidationError) as exc_info:
         Model(nullable1='some text')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': 'some text',
             'loc': ('nullable1',),
@@ -1814,7 +1838,7 @@ def test_required_any():
 
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {}, 'loc': ('optional1',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {}, 'loc': ('nullable1',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {}, 'loc': ('nullable2',), 'msg': 'Field required', 'type': 'missing'},
@@ -1822,14 +1846,14 @@ def test_required_any():
     ]
     with pytest.raises(ValidationError) as exc_info:
         Model(nullable1='a')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {'nullable1': 'a'}, 'loc': ('optional1',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {'nullable1': 'a'}, 'loc': ('nullable2',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {'nullable1': 'a'}, 'loc': ('nullable3',), 'msg': 'Field required', 'type': 'missing'},
     ]
     with pytest.raises(ValidationError) as exc_info:
         Model(nullable2=False)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': {'nullable2': False}, 'loc': ('optional1',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {'nullable2': False}, 'loc': ('nullable1',), 'msg': 'Field required', 'type': 'missing'},
         {'input': {'nullable2': False}, 'loc': ('nullable3',), 'msg': 'Field required', 'type': 'missing'},
@@ -1841,7 +1865,7 @@ def test_required_any():
             'nullable1': None,
             'nullable2': None,
         }
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': {'nullable1': None, 'nullable2': None},
             'loc': ('optional1',),
@@ -1894,8 +1918,8 @@ def test_custom_generic_validators():
             if not args:
                 return schema
 
-            t1_f = AnalyzedType(args[0]).validate_python
-            t2_f = AnalyzedType(args[1]).validate_python
+            t1_f = TypeAdapter(args[0]).validate_python
+            t2_f = TypeAdapter(args[1]).validate_python
 
             def validate(v, info):
                 if not args:
@@ -1916,7 +1940,7 @@ def test_custom_generic_validators():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foo', gen='invalid', gen2='invalid')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'class': 'test_custom_generic_validators.<locals>.MyGen'},
             'input': 'invalid',
@@ -1935,7 +1959,7 @@ def test_custom_generic_validators():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foo', gen=MyGen(t1='bar', t2='baz'), gen2=MyGen(t1='bar', t2='baz'))
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'input': 'baz',
             'loc': ('gen', 't2'),
@@ -1969,7 +1993,7 @@ def test_custom_generic_arbitrary_allowed():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foo', gen='invalid')
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'ctx': {'class': 'test_custom_generic_arbitrary_allowed.<locals>.MyGen'},
             'input': 'invalid',
@@ -2018,12 +2042,14 @@ def test_hashable_required():
     Model(v=None)
     with pytest.raises(ValidationError) as exc_info:
         Model(v=[])
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': [], 'loc': ('v',), 'msg': 'Input should be hashable', 'type': 'is_hashable'}
     ]
     with pytest.raises(ValidationError) as exc_info:
         Model()
-    assert exc_info.value.errors() == [{'input': {}, 'loc': ('v',), 'msg': 'Field required', 'type': 'missing'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': {}, 'loc': ('v',), 'msg': 'Field required', 'type': 'missing'}
+    ]
 
 
 @pytest.mark.parametrize('default', [1, None])
@@ -2088,7 +2114,7 @@ def test_default_factory_called_once():
     with pytest.raises(ValidationError) as exc_info:
         MyBadModel()
     assert v == 2  # `factory` has been called to run validation
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': 2, 'loc': ('id',), 'msg': 'Input should be a valid list', 'type': 'list_type'}
     ]
 
@@ -2161,11 +2187,15 @@ def test_frozen_config_and_field():
     b = Bar(a='x', c='z')
     with pytest.raises(ValidationError) as exc_info:
         b.a = 'y'
-    assert exc_info.value.errors() == [{'input': 'y', 'loc': ('a',), 'msg': 'Field is frozen', 'type': 'frozen_field'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': 'y', 'loc': ('a',), 'msg': 'Field is frozen', 'type': 'frozen_field'}
+    ]
 
     with pytest.raises(ValidationError) as exc_info:
         b.c = 'y'
-    assert exc_info.value.errors() == [{'input': 'y', 'loc': ('c',), 'msg': 'Field is frozen', 'type': 'frozen_field'}]
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': 'y', 'loc': ('c',), 'msg': 'Field is frozen', 'type': 'frozen_field'}
+    ]
 
     assert b.model_dump() == {'a': 'x', 'c': 'z'}
 
@@ -2197,7 +2227,6 @@ def test_bytes_subclass():
     assert m.my_bytes.__class__ == BytesSubclass
 
 
-@pytest.mark.xfail(reason='subclass not preserved for field of type int')
 def test_int_subclass():
     class MyModel(BaseModel):
         my_int: int
@@ -2208,10 +2237,11 @@ def test_int_subclass():
             return self
 
     m = MyModel(my_int=IntSubclass(123))
-    # TODO: Is this still the behavior we want in v2? (Currently m.my_int.__class__ is int)
-    #   "yes, because in pydantic-core we cast the value to a rust i64, so the sub-type information is lost."
-    #   (more detail about how to handle this in: https://github.com/pydantic/pydantic/pull/5151#discussion_r1130691036)
-    assert m.my_int.__class__ == IntSubclass
+    # This is expected behavior in `V2` because in pydantic-core we cast the value to a rust i64,
+    # so the sub-type information is lost."
+    # (more detail about how to handle this in: https://github.com/pydantic/pydantic/pull/5151#discussion_r1130691036)
+    assert m.my_int.__class__ != IntSubclass
+    assert isinstance(m.my_int, int)
 
 
 def test_model_issubclass():
@@ -2259,7 +2289,7 @@ def test_long_int():
     with pytest.raises(ValidationError) as exc_info:
         Model(x=too_long)
 
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {
             'loc': ('x',),
             'msg': 'value is not a valid integer',
@@ -2380,7 +2410,7 @@ def test_generic_wrapped_forwardref():
     Operation.model_validate({'callbacks': [PathItem()]})
     with pytest.raises(ValidationError) as exc_info:
         Operation.model_validate({'callbacks': [1]})
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': 1, 'loc': ('callbacks', 0), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
     ]
 
@@ -2395,7 +2425,7 @@ def test_plain_basemodel_field():
     assert Model(x=Model2()).x == Model2()
     with pytest.raises(ValidationError) as exc_info:
         Model(x=1)
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': 1, 'loc': ('x',), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
     ]
 
@@ -2445,6 +2475,51 @@ def test_invalid_forward_ref_model():
     assert A(B=B()).B == B()
     with pytest.raises(ValidationError) as exc_info:
         A(B=C())
-    assert exc_info.value.errors() == [
+    assert exc_info.value.errors(include_url=False) == [
         {'input': C(), 'loc': ('B',), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
     ]
+
+
+@pytest.mark.skipif(sys.version_info < (3, 9), reason='cannot parametrize types before 3.9')
+@pytest.mark.parametrize(
+    ('sequence_type', 'input_data', 'expected_error_type', 'expected_error_msg', 'expected_error_ctx'),
+    [
+        pytest.param(List[str], '1bc', 'list_type', 'Input should be a valid list', None, id='list[str]'),
+        pytest.param(
+            Sequence[str],
+            '1bc',
+            'sequence_str',
+            "'str' instances are not allowed as a Sequence value",
+            {'type_name': 'str'},
+            id='Sequence[str]',
+        ),
+        pytest.param(
+            Sequence[bytes],
+            b'1bc',
+            'sequence_str',
+            "'bytes' instances are not allowed as a Sequence value",
+            {'type_name': 'bytes'},
+            id='Sequence[bytes]',
+        ),
+    ],
+)
+def test_sequences_str(sequence_type, input_data, expected_error_type, expected_error_msg, expected_error_ctx):
+    input_sequence = [input_data[:1], input_data[1:]]
+    expected_error = {
+        'type': expected_error_type,
+        'input': input_data,
+        'loc': ('str_sequence',),
+        'msg': expected_error_msg,
+    }
+    if expected_error_ctx is not None:
+        expected_error.update(ctx=expected_error_ctx)
+
+    class Model(BaseModel):
+        str_sequence: sequence_type
+
+    assert Model(str_sequence=input_sequence).str_sequence == input_sequence
+
+    with pytest.raises(ValidationError) as e:
+        Model(str_sequence=input_data)
+
+    assert e.value.errors(include_url=False) == [expected_error]

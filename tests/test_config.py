@@ -191,10 +191,14 @@ class TestsBaseConfig:
         assert Model.__slots__ == {'_foo'}
         m = Model(_foo='field')
         assert m._foo == 'private_attribute'
-        assert m.__dict__ == m.model_dump() == {'_foo': 'field'}
+        assert m.__dict__ == {}
+        assert m.__pydantic_extra__ == {'_foo': 'field'}
+        assert m.model_dump() == {'_foo': 'field'}
         m._foo = 'still_private'
         assert m._foo == 'still_private'
-        assert m.__dict__ == m.model_dump() == {'_foo': 'field'}
+        assert m.__dict__ == {}
+        assert m.__pydantic_extra__ == {'_foo': 'field'}
+        assert m.model_dump() == {'_foo': 'field'}
 
     def test_base_config_parse_model_with_strict_config_disabled(
         self, BaseConfigModelWithStrictConfig: Type[BaseModel]
@@ -222,8 +226,8 @@ class TestsBaseConfig:
         assert Model(a=42).a == 42
         with pytest.raises(ValidationError) as exc_info:
             Model(a=float('nan'))
-        # insert_assert(exc_info.value.errors())
-        assert exc_info.value.errors() == [
+        # insert_assert(exc_info.value.errors(include_url=False))
+        assert exc_info.value.errors(include_url=False) == [
             {
                 'type': 'finite_number',
                 'loc': ('a',),
@@ -430,12 +434,12 @@ Valid config keys have changed in V2:
 * 'max_anystr_length' has been renamed to 'str_max_length'
 * 'min_anystr_length' has been renamed to 'str_min_length'
 * 'orm_mode' has been renamed to 'from_attributes'
+* 'schema_extra' has been renamed to 'json_schema_extra'
 * 'validate_all' has been renamed to 'validate_default'
 * 'allow_mutation' has been removed
 * 'error_msg_templates' has been removed
 * 'fields' has been removed
 * 'getter_dict' has been removed
-* 'schema_extra' has been removed
 * 'smart_union' has been removed
 * 'underscore_attrs_are_private' has been removed
     """.strip()
