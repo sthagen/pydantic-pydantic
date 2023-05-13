@@ -35,21 +35,21 @@ from pydantic import (
     ValidationError,
     constr,
     errors,
-)
-from pydantic.decorators import (
-    field_serializer,
     field_validator,
-    model_serializer,
     model_validator,
     root_validator,
     validator,
 )
 from pydantic.fields import Field, computed_field
+from pydantic.functional_serializers import (
+    field_serializer,
+    model_serializer,
+)
 
 
 def test_str_bytes():
     class Model(BaseModel):
-        v: Union[str, bytes] = ...
+        v: Union[str, bytes]
 
     m = Model(v='s')
     assert m.v == 's'
@@ -1237,7 +1237,7 @@ def test_multiple_errors():
             'type': 'decimal_parsing',
             'loc': (
                 'a',
-                'lax-or-strict[lax=function-after[validate(), union[is-instance[Decimal],int,float,constrained-str]],strict=custom-error[function-after[validate(), is-instance[Decimal]]]]',  # noqa: E501
+                'lax-or-strict[lax=function-after[validate(), union[json-or-python[json=function-after[Decimal(), union[int,float,constrained-str]],python=is-instance[Decimal]],int,float,constrained-str]],strict=custom-error[function-after[validate(), json-or-python[json=function-after[Decimal(), union[int,float,constrained-str]],python=is-instance[Decimal]]]]]',  # noqa: E501
             ),
             'msg': 'Input should be a valid decimal',
             'input': 'foobar',
@@ -2026,7 +2026,7 @@ def test_custom_generic_disallowed():
 
     match = (
         r'Unable to generate pydantic-core schema for (.*)MyGen\[str, bool\](.*). '
-        r'Setting `arbitrary_types_allowed=True` in the model_config may prevent this error.'
+        r'Set `arbitrary_types_allowed=True` in the model_config ignore this error'
     )
     with pytest.raises(TypeError, match=match):
 
@@ -2346,11 +2346,13 @@ def test_abstractmethod_missing_for_all_decorators(bases):
         def my_model_validator(cls, values, handler, info):
             raise NotImplementedError
 
-        @root_validator(skip_on_failure=True)
-        @classmethod
-        @abstractmethod
-        def my_root_validator(cls, values):
-            raise NotImplementedError
+        with pytest.warns(DeprecationWarning):
+
+            @root_validator(skip_on_failure=True)
+            @classmethod
+            @abstractmethod
+            def my_root_validator(cls, values):
+                raise NotImplementedError
 
         with pytest.warns(DeprecationWarning):
 
@@ -2373,7 +2375,7 @@ def test_abstractmethod_missing_for_all_decorators(bases):
         @computed_field
         @property
         @abstractmethod
-        def my_computed_field(self):
+        def my_computed_field(self) -> Any:
             raise NotImplementedError
 
     class Square(AbstractSquare):

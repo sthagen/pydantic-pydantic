@@ -1,5 +1,5 @@
 """
-Logic related to validators applied to models etc. via the `@validator` and `@root_validator` decorators.
+Logic related to validators applied to models etc. via the `@field_validator` and `@root_validator` decorators.
 """
 from __future__ import annotations as _annotations
 
@@ -17,7 +17,7 @@ from ._core_utils import get_type_ref
 from ._internal_dataclass import slots_dataclass
 
 if TYPE_CHECKING:
-    from ..decorators import FieldValidatorModes
+    from ..functional_validators import FieldValidatorModes
 
 try:
     from functools import cached_property  # type: ignore
@@ -330,7 +330,7 @@ def inspect_validator(validator: Callable[..., Any], mode: FieldValidatorModes) 
 
     raise PydanticUserError(
         f'Unrecognized field_validator function signature for {validator} with `mode={mode}`:{sig}',
-        code='field-validator-signature',
+        code='validator-signature',
     )
 
 
@@ -489,22 +489,36 @@ def unwrap_wrapped_function(
     Returns:
         The underlying function of the wrapped function.
     """
-    all: tuple[Any, ...]
+    all: list[Any]
+    try:
+        from functools import cached_property  # type: ignore
+
+        cached_property_list = [cached_property]
+    except ImportError:
+        cached_property = int  # anything that doesn't match isinstance below
+        cached_property_list = []
+
     if unwrap_class_static_method:
-        all = (
+        all = [
             staticmethod,
             classmethod,
             partial,
             partialmethod,
-        )
+            property,
+            *cached_property_list,
+        ]
     else:
-        all = partial, partialmethod
+        all = [partial, partialmethod, property, *cached_property_list]
 
-    while isinstance(func, all):
+    while isinstance(func, tuple(all)):
         if unwrap_class_static_method and isinstance(func, (classmethod, staticmethod)):
             func = func.__func__
         elif isinstance(func, (partial, partialmethod)):
             func = func.func
+        elif isinstance(func, property):
+            func = func.fget  # arbitrary choice, convenient for computed fields
+        elif isinstance(func, cached_property):
+            func = func.func  # type: ignore # same reasoning as above
 
     return func
 

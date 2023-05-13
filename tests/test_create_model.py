@@ -2,8 +2,18 @@ from typing import Optional, Tuple
 
 import pytest
 
-from pydantic import BaseModel, ConfigDict, Field, PydanticUserError, ValidationError, create_model, errors
-from pydantic.decorators import field_validator, validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    PydanticUserError,
+    ValidationError,
+    create_model,
+    errors,
+    field_validator,
+    validator,
+)
 from pydantic.fields import ModelPrivateAttr
 
 
@@ -92,7 +102,7 @@ def test_custom_config():
     m = model(**{'foo': '987'})
     assert m.foo == 987
     assert model.model_config == expected_config
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         m.foo = 654
 
 
@@ -269,6 +279,38 @@ def test_set_name(base):
     # with _init_private_attributes), so the descriptor protocol won't work.
     if base is object:
         assert a._some_func == 2
+
+
+def test_private_attr_set_name():
+    class SetNameInt(int):
+        _owner_attr_name: Optional[str] = None
+
+        def __set_name__(self, owner, name):
+            self._owner_attr_name = f'{owner.__name__}.{name}'
+
+    _private_attr_default = SetNameInt(2)
+
+    class Model(BaseModel):
+        _private_attr: int = PrivateAttr(default=_private_attr_default)
+
+    assert Model()._private_attr == 2
+    assert _private_attr_default._owner_attr_name == 'Model._private_attr'
+
+
+def test_private_attr_set_name_do_not_crash_if_not_callable():
+    class SetNameInt(int):
+        _owner_attr_name: Optional[str] = None
+        __set_name__ = None
+
+    _private_attr_default = SetNameInt(2)
+
+    class Model(BaseModel):
+        _private_attr: int = PrivateAttr(default=_private_attr_default)
+
+    # Checks below are just to ensure that everything is the same as in `test_private_attr_set_name`
+    # The main check is that model class definition above doesn't crash
+    assert Model()._private_attr == 2
+    assert _private_attr_default._owner_attr_name is None
 
 
 def test_create_model_with_slots():

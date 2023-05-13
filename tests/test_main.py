@@ -37,8 +37,8 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     constr,
+    field_validator,
 )
-from pydantic.decorators import field_validator
 
 
 def test_success():
@@ -350,6 +350,33 @@ def test_field_order_is_preserved_with_extra():
     assert str(model.model_dump_json()) == '{"a":1,"b":"2","c":3.0,"d":4}'
 
 
+def test_extra_broken_via_pydantic_extra_interference():
+    """At the time of writing this test there is `_model_construction.model_extra_getattr` being assigned to model's
+    `__getattr__`. The method then expects `BaseModel.__pydantic_extra__` isn't `None`. Both this actions happen when
+    `model_config.extra` is set to `True`. However, this behavior could be accidentally broken in a subclass of
+    `BaseModel`. In that case `AttributeError` should be thrown when `__getattr__` is being accessed essentially
+    disabling the `extra` functionality.
+
+    TODO: Should this be a specific exception different from a normal case of accessing an extra field that wasn't
+    populated?
+    """
+
+    class BrokenExtraBaseModel(BaseModel):
+        def model_post_init(self, __context: Any) -> None:
+            super().model_post_init(__context)
+            self.__pydantic_extra__ = None
+
+    class Model(BrokenExtraBaseModel):
+        model_config = ConfigDict(extra='allow')
+
+    m = Model(extra_field='some extra value')
+
+    with pytest.raises(AttributeError) as e:
+        m.extra_field
+
+    assert e.value.args == ("'Model' object has no attribute 'extra_field'",)
+
+
 def test_set_attr(UltraSimpleModel):
     m = UltraSimpleModel(a=10.2)
     assert m.model_dump() == {'a': 10.2, 'b': 10}
@@ -443,9 +470,11 @@ def test_frozen_model():
     m = FrozenModel()
 
     assert m.a == 10
-    with pytest.raises(TypeError) as exc_info:
+    with pytest.raises(ValidationError) as exc_info:
         m.a = 11
-    assert '"FrozenModel" is frozen and does not support item assignment' in exc_info.value.args[0]
+    assert exc_info.value.errors(include_url=False) == [
+        {'type': 'frozen_instance', 'loc': ('a',), 'msg': 'Instance is frozen', 'input': 11}
+    ]
 
 
 def test_not_frozen_are_not_hashable():
@@ -2229,3 +2258,17 @@ def test_equality_delegation():
         foo: str
 
     assert MyModel(foo='bar') == ANY
+
+
+def test_recursion_loop_error():
+    class Model(BaseModel):
+        x: List['Model']
+
+    data = {'x': []}
+    data['x'].append(data)
+    with pytest.raises(ValidationError) as exc_info:
+        Model(**data)
+    assert repr(exc_info.value.errors(include_url=False)[0]) == (
+        "{'type': 'recursion_loop', 'loc': ('x', 0, 'x', 0), 'msg': "
+        "'Recursion error - cyclic reference detected', 'input': {'x': [{...}]}}"
+    )

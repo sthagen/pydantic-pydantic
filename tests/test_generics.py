@@ -30,8 +30,8 @@ from typing import (
 
 import pytest
 from dirty_equals import HasRepr
-from pydantic_core import core_schema
-from typing_extensions import Annotated, Literal, OrderedDict, TypeVarTuple, Unpack
+from pydantic_core import CoreSchema, core_schema
+from typing_extensions import Annotated, Literal, OrderedDict, TypeVarTuple, Unpack, get_args
 
 from pydantic import (
     BaseModel,
@@ -43,7 +43,8 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     computed_field,
-    root_validator,
+    field_validator,
+    model_validator,
 )
 from pydantic._internal._core_utils import collect_invalid_schemas
 from pydantic._internal._generics import (
@@ -55,7 +56,7 @@ from pydantic._internal._generics import (
     recursively_defined_type_refs,
     replace_types,
 )
-from pydantic.decorators import field_validator
+from pydantic.annotated import GetCoreSchemaHandler
 
 
 @pytest.fixture()
@@ -104,13 +105,13 @@ def test_value_validation():
                 raise ValueError('some value is zero')
             return v
 
-        @root_validator(skip_on_failure=True)
+        @model_validator(mode='after')
         @classmethod
-        def validate_sum(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-            data = values.get('data', {})
+        def validate_sum(cls, m):
+            data = m.data
             if sum(data.values()) > 5:
                 raise ValueError('sum too large')
-            return values
+            return m
 
     assert Response[Dict[int, int]](data={1: '4'}).model_dump() == {'data': {1: 4}}
     with pytest.raises(ValidationError) as exc_info:
@@ -175,10 +176,11 @@ def test_config_is_inherited():
 
     instance = Model[int](data=1)
 
-    with pytest.raises(TypeError) as exc_info:
+    with pytest.raises(ValidationError) as exc_info:
         instance.data = 2
-
-    assert str(exc_info.value) == '"Model[int]" is frozen and does not support item assignment'
+    assert exc_info.value.errors(include_url=False) == [
+        {'type': 'frozen_instance', 'loc': ('data',), 'msg': 'Instance is frozen', 'input': 2}
+    ]
 
 
 def test_default_argument():
@@ -444,7 +446,7 @@ def test_generic_config():
 
     result = Result[int](data=1)
     assert result.data == 1
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         result.data = 2
 
 
@@ -1108,25 +1110,33 @@ def test_replace_types_with_user_defined_generic_type_field():
     VT = TypeVar('VT')
 
     class CustomCounter(Counter[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(Counter[get_args(source_type)[0]]))
 
     class CustomDefaultDict(DefaultDict[KT, VT]):
         pass
 
     class CustomDeque(Deque[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(Deque[get_args(source_type)[0]]))
 
     class CustomDict(Dict[KT, VT]):
         pass
 
     class CustomFrozenset(FrozenSet[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(FrozenSet[get_args(source_type)[0]]))
 
     class CustomIterable(Iterable[T]):
         pass
 
     class CustomList(List[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(List[get_args(source_type)[0]]))
 
     class CustomMapping(Mapping[KT, VT]):
         pass
@@ -1135,7 +1145,9 @@ def test_replace_types_with_user_defined_generic_type_field():
         pass
 
     class CustomSet(Set[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(Set[get_args(source_type)[0]]))
 
     class CustomTuple(Tuple[T]):
         pass
@@ -1173,9 +1185,9 @@ def test_replace_types_with_user_defined_generic_type_field():
 
     # The following assertions are just to document the current behavior, and should
     # be updated if/when we do a better job of respecting the exact annotated type
-    assert type(m.counter_field) is Counter.__origin__
+    assert type(m.counter_field) is CustomCounter
     assert type(m.default_dict_field) is dict
-    assert type(m.deque_field) is deque
+    assert type(m.deque_field) is CustomDeque
     assert type(m.dict_field) is dict
     assert type(m.frozenset_field) is CustomFrozenset
     assert type(m.iterable_field).__name__ == 'ValidatorIterator'
@@ -1212,8 +1224,9 @@ def test_custom_sequence_behavior():
     with pytest.raises(
         PydanticSchemaGenerationError,
         match=(
-            'Unable to generate pydantic-core schema for custom subclasses of Sequence.'
-            ' Please define `__get_pydantic_core_schema__`.'
+            r'Unable to generate pydantic-core schema for .*'
+            ' Set `arbitrary_types_allowed=True` in the model_config ignore this error'
+            ' or implement `__get_pydantic_core_schema__` on your type to fully support it'
         ),
     ):
 
@@ -1830,7 +1843,9 @@ def test_generic_with_user_defined_generic_field():
     T = TypeVar('T')
 
     class GenericList(List[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(GenericList, handler(List[get_args(source_type)[0]]))
 
     class Model(BaseModel, Generic[T]):
         field: GenericList[T]
