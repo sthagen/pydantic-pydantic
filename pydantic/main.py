@@ -14,7 +14,7 @@ from typing import Any, Callable, Generic, Mapping, Tuple, cast
 
 import pydantic_core
 import typing_extensions
-from typing_extensions import deprecated
+from typing_extensions import Literal, Unpack, deprecated
 
 from ._internal import (
     _config,
@@ -55,14 +55,9 @@ if typing.TYPE_CHECKING:
     # should be `set[int] | set[str] | dict[int, IncEx] | dict[str, IncEx] | None`, but mypy can't cope
     IncEx: typing_extensions.TypeAlias = 'set[int] | set[str] | dict[int, Any] | dict[str, Any] | None'
 
-__all__ = 'BaseModel', 'create_model'
+__all__ = 'BaseModel', 'RootModel', 'create_model'
 
 _object_setattr = _model_construction.object_setattr
-# Note `ModelMetaclass` refers to `BaseModel`, but is also used to *create* `BaseModel`, so we need to add this extra
-# (somewhat hacky) boolean to keep track of whether we've created the `BaseModel` class yet, and therefore whether it's
-# safe to refer to it. If it *hasn't* been created, we assume that the `__new__` call we're in the middle of is for
-# the `BaseModel` class, since that's defined immediately after the metaclass.
-_base_class_defined = False
 
 
 class _ModelNamespaceDict(dict):  # type: ignore[type-arg]
@@ -106,8 +101,11 @@ class ModelMetaclass(ABCMeta):
         Returns:
             type: the new class created by the metaclass
         """
-        if _base_class_defined:
-            base_field_names, class_vars, base_private_attributes = _collect_bases_data(bases)
+        # Note `ModelMetaclass` refers to `BaseModel`, but is also used to *create* `BaseModel`, so we rely on the fact
+        # that `BaseModel` itself won't have any bases, but any subclass of it will, to determine whether the `__new__`
+        # call we're in the middle of is for the `BaseModel` class.
+        if bases:
+            base_field_names, class_vars, base_private_attributes = mcs._collect_bases_data(bases)
 
             config_wrapper = _config.ConfigWrapper.for_model(bases, namespace, kwargs)
             namespace['model_config'] = config_wrapper.config_dict
@@ -148,6 +146,9 @@ class ModelMetaclass(ABCMeta):
 
             cls: type[BaseModel] = super().__new__(mcs, cls_name, bases, namespace, **kwargs)  # type: ignore
 
+            cls.__pydantic_custom_init__ = not getattr(cls.__init__, '__pydantic_base_init__', False)
+            cls.__pydantic_post_init__ = None if cls.model_post_init is BaseModel.model_post_init else 'model_post_init'
+
             cls.__pydantic_decorators__ = _decorators.DecoratorInfos.build(cls)
 
             # Use the getattr below to grab the __parameters__ from the `typing.Generic` parent class
@@ -176,7 +177,7 @@ class ModelMetaclass(ABCMeta):
                     'parameters': parameters,
                 }
 
-            cls.__pydantic_model_complete__ = False  # Ensure this specific class gets completed
+            cls.__pydantic_complete__ = False  # Ensure this specific class gets completed
 
             # preserve `__set_name__` protocol defined in https://peps.python.org/pep-0487
             # for attributes not in `new_namespace` (e.g. private attributes)
@@ -190,7 +191,7 @@ class ModelMetaclass(ABCMeta):
             parent_namespace = getattr(cls, '__pydantic_parent_namespace__', None)
 
             types_namespace = _typing_extra.get_cls_types_namespace(cls, parent_namespace)
-            _model_construction.set_model_fields(cls, bases, types_namespace)
+            _model_construction.set_model_fields(cls, bases, config_wrapper, types_namespace)
             _model_construction.complete_model_class(
                 cls,
                 cls_name,
@@ -219,8 +220,21 @@ class ModelMetaclass(ABCMeta):
         """
         return hasattr(instance, '__pydantic_validator__') and super().__instancecheck__(instance)
 
+    @staticmethod
+    def _collect_bases_data(bases: tuple[type[Any], ...]) -> tuple[set[str], set[str], dict[str, ModelPrivateAttr]]:
+        field_names: set[str] = set()
+        class_vars: set[str] = set()
+        private_attributes: dict[str, ModelPrivateAttr] = {}
+        for base in bases:
+            if issubclass(base, BaseModel) and base is not BaseModel:
+                # model_fields might not be defined yet in the case of generics, so we use getattr here:
+                field_names.update(getattr(base, 'model_fields', {}).keys())
+                class_vars.update(base.__class_vars__)
+                private_attributes.update(base.__private_attributes__)
+        return field_names, class_vars, private_attributes
 
-class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
+
+class BaseModel(metaclass=ModelMetaclass):
     """
     A base model class for creating Pydantic models.
 
@@ -260,6 +274,8 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         __pydantic_extra__: dict[str, Any] | None = None
         __pydantic_generic_metadata__: typing.ClassVar[_generics.PydanticGenericMetadata]
         __pydantic_parent_namespace__: typing.ClassVar[dict[str, Any] | None]
+        __pydantic_custom_init__: typing.ClassVar[bool]
+        __pydantic_post_init__: typing.ClassVar[None | Literal['model_post_init']]
     else:
         # `model_fields` and `__pydantic_decorators__` must be set for
         # pydantic._internal._generate_schema.GenerateSchema.model_schema to work for a plain BaseModel annotation
@@ -272,8 +288,8 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
 
     model_config = ConfigDict()
     __slots__ = '__dict__', '__pydantic_fields_set__', '__pydantic_extra__'
-    __doc__ = ''  # Null out the Representation docstring
-    __pydantic_model_complete__ = False
+    __pydantic_complete__ = False
+    __pydantic_root_model__: typing.ClassVar[bool] = False
 
     def __init__(__pydantic_self__, **data: Any) -> None:  # type: ignore
         """
@@ -286,6 +302,8 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
         __tracebackhide__ = True
         __pydantic_self__.__pydantic_validator__.validate_python(data, self_instance=__pydantic_self__)
+
+    __init__.__pydantic_base_init__ = True  # type: ignore
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -337,6 +355,24 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             JsonSchemaValue: A JSON schema, as a Python object.
         """
         return __handler(__core_schema)
+
+    if typing.TYPE_CHECKING:
+
+        def __init_subclass__(cls, **kwargs: Unpack[ConfigDict]):
+            """
+            This signature is included purely to help type-checkers check arguments to class declaration, which
+            provides a way to conveniently set model_config key/value pairs:
+
+                class MyModel(BaseModel, extra='allow'):
+                    ...
+
+            However, this may be deceiving, since the _actual_ calls to `__init_subclass__` will not receive any
+            of the config arguments, and will only receive any keyword arguments passed during class initialization
+            that are _not_ expected keys in ConfigDict. (This is due to the way `ModelMetaclass.__new__` works.)
+
+            Args:
+                **kwargs (Unpack[ConfigDict]): Keyword arguments passed to the class definition, which set model_config
+            """
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -461,7 +497,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
                 'loc': (name,),
                 'input': value,
             }
-            raise pydantic_core.ValidationError(self.__class__.__name__, [error])
+            raise pydantic_core.ValidationError.from_exception_data(self.__class__.__name__, [error])
 
         attr = getattr(self.__class__, name, None)
         if isinstance(attr, property):
@@ -623,7 +659,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             _fields_set = set(values.keys())
         _object_setattr(m, '__pydantic_fields_set__', _fields_set)
         _object_setattr(m, '__pydantic_extra__', _extra)
-        if type(m).model_post_init is not BaseModel.model_post_init:
+        if cls.__pydantic_post_init__:
             m.model_post_init(None)
         return m
 
@@ -688,21 +724,20 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         _types_namespace: dict[str, Any] | None = None,
     ) -> bool | None:
         """
-        Try to rebuild or reconstruct the model schema.
+        Try to rebuild or reconstruct the model core schema
 
         Args:
-            cls (type): The class to build the model schema for.
-            force (bool): Whether or not to force the rebuilding of the model schema, defaults to `False`.
-            raise_errors (bool): Whether or not to raise errors, defaults to `True`.
+            cls (type): The class to build the model core schema for.
+            force (bool): Whether to force the rebuilding of the model schema, defaults to `False`.
+            raise_errors (bool): Whether to raise errors, defaults to `True`.
             _parent_namespace_depth (int): The depth level of the parent namespace, defaults to 2.
             _types_namespace (dict[str, Any] | None): The types namespace, defaults to `None`.
 
         Returns:
-            bool or None: Returns `None` if model schema is complete and no rebuilding is required, or `True` if
-                        rebuilding is successful, otherwise returns `None`.
-
+            bool or None: Returns `None` if model schema is complete and no rebuilding is required.
+                If rebuilding _is_ required, returns `True` if rebuilding was successful, otherwise `False`.
         """
-        if not force and cls.__pydantic_model_complete__:
+        if not force and cls.__pydantic_complete__:
             return None
         else:
             if _types_namespace is not None:
@@ -823,6 +858,18 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
             yield from ((k, v) for k, v in pydantic_extra.items())
         yield from ((k, getattr(self, k)) for k, v in self.model_computed_fields.items() if v.repr)
 
+    # take logic from `_repr.Representation` without the side effects of inheritance, see #5740
+    __repr_name__ = _repr.Representation.__repr_name__
+    __repr_str__ = _repr.Representation.__repr_str__
+    __pretty__ = _repr.Representation.__pretty__
+    __rich_repr__ = _repr.Representation.__rich_repr__
+
+    def __str__(self) -> str:
+        return self.__repr_str__(' ')
+
+    def __repr__(self) -> str:
+        return f'{self.__repr_name__()}({self.__repr_str__(", ")})'
+
     def __class_getitem__(
         cls, typevar_values: type[Any] | tuple[type[Any], ...]
     ) -> type[BaseModel] | _forward_ref.PydanticForwardRef | _forward_ref.PydanticRecursiveRef:
@@ -877,7 +924,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
                 except PydanticUndefinedAnnotation:
                     # It's okay if it fails, it just means there are still undefined types
                     # that could be evaluated later.
-                    # TODO: Presumably we should error if validation is attempted here?
+                    # TODO: Make sure validation fails if there are still undefined types, perhaps using MockValidator
                     pass
 
                 submodel = _generics.create_generic_submodel(model_name, origin, args, params)
@@ -955,8 +1002,6 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
-        # TODO: What do we do about the following arguments?
-        #   Do they need to go on model_config now, and get used by the serializer?
         encoder: typing.Callable[[Any], Any] | None = Undefined,  # type: ignore[assignment]
         models_as_dict: bool = Undefined,  # type: ignore[assignment]
         **dumps_kwargs: Any,
@@ -1030,7 +1075,7 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
                 'loc': ('__root__',),
                 'input': b,
             }
-            raise pydantic_core.ValidationError(cls.__name__, [error])
+            raise pydantic_core.ValidationError.from_exception_data(cls.__name__, [error])
         return cls.model_validate(obj)
 
     @classmethod
@@ -1207,7 +1252,23 @@ class BaseModel(_repr.Representation, metaclass=ModelMetaclass):
         return _deprecated_copy_internals._calculate_keys(self, *args, **kwargs)  # type: ignore
 
 
-_base_class_defined = True
+RootModelRootType = typing.TypeVar('RootModelRootType')
+
+
+class RootModel(BaseModel, typing.Generic[RootModelRootType]):
+    __pydantic_root_model__ = True
+    __pydantic_extra__ = None
+
+    root: RootModelRootType
+
+    def __init__(__pydantic_self__, root: RootModelRootType) -> None:  # type: ignore
+        __tracebackhide__ = True
+        __pydantic_self__.__pydantic_validator__.validate_python(root, self_instance=__pydantic_self__)
+
+    __init__.__pydantic_base_init__ = True  # type: ignore
+
+    def __repr_args__(self) -> _repr.ReprArgs:
+        yield 'root', self.root
 
 
 @typing.overload
@@ -1326,7 +1387,7 @@ def _collect_bases_data(bases: tuple[type[Any], ...]) -> tuple[set[str], set[str
     class_vars: set[str] = set()
     private_attributes: dict[str, ModelPrivateAttr] = {}
     for base in bases:
-        if _base_class_defined and issubclass(base, BaseModel) and base != BaseModel:
+        if issubclass(base, BaseModel) and base != BaseModel:
             # model_fields might not be defined yet in the case of generics, so we use getattr here:
             field_names.update(getattr(base, 'model_fields', {}).keys())
             class_vars.update(base.__class_vars__)

@@ -68,14 +68,7 @@ def inspect_namespace(  # noqa C901
     raw_annotations = namespace.get('__annotations__', {})
 
     if '__root__' in raw_annotations or '__root__' in namespace:
-        # TODO: Update error message with migration description and/or link to documentation
-        #   Needs to mention:
-        #   * Use root_validator to wrap input data in a dict
-        #   * Use model_serializer to extract wrapped data during dumping
-        #   * Use model_modify_json_schema (or whatever it becomes) to unwrap the JSON schema
-        raise TypeError(
-            '__root__ models are no longer supported in v2; a migration guide will be added in the near future'
-        )
+        raise TypeError("To define root models, use `pydantic.RootModel` rather than a field called '__root__'")
 
     ignored_names: set[str] = set()
     for var_name, value in list(namespace.items()):
@@ -142,12 +135,14 @@ def single_underscore(name: str) -> bool:
     return name.startswith('_') and not name.startswith('__')
 
 
-def set_model_fields(cls: type[BaseModel], bases: tuple[type[Any], ...], types_namespace: dict[str, Any]) -> None:
+def set_model_fields(
+    cls: type[BaseModel], bases: tuple[type[Any], ...], config_wrapper: ConfigWrapper, types_namespace: dict[str, Any]
+) -> None:
     """
     Collect and set `cls.model_fields` and `cls.__class_vars__`.
     """
     typevars_map = get_model_typevars_map(cls)
-    fields, class_vars = collect_model_fields(cls, bases, types_namespace, typevars_map=typevars_map)
+    fields, class_vars = collect_model_fields(cls, bases, config_wrapper, types_namespace, typevars_map=typevars_map)
 
     cls.model_fields = fields
     cls.__class_vars__.update(class_vars)
@@ -182,20 +177,19 @@ def complete_model_class(
     except PydanticUndefinedAnnotation as e:
         if raise_errors:
             raise
-        if config_wrapper.undefined_types_warning:
-            config_warning_string = (
-                f'`{cls_name}` has an undefined annotation: `{e.name}`. '
-                f'It may be possible to resolve this by setting '
-                f'undefined_types_warning=False in the config for `{cls_name}`.'
-            )
-            # FIXME UserWarning should not be raised here, but rather warned!
-            raise UserWarning(config_warning_string)
-        usage_warning_string = (
+        undefined_type_error_message = (
             f'`{cls_name}` is not fully defined; you should define `{e.name}`, then call `{cls_name}.model_rebuild()` '
             f'before the first `{cls_name}` instance is created.'
         )
+
+        def attempt_rebuild() -> SchemaValidator | None:
+            if cls.model_rebuild(raise_errors=False, _parent_namespace_depth=5):
+                return cls.__pydantic_validator__
+            else:
+                return None
+
         cls.__pydantic_validator__ = MockValidator(  # type: ignore[assignment]
-            usage_warning_string, code='model-not-fully-defined'
+            undefined_type_error_message, code='class-not-fully-defined', attempt_rebuild=attempt_rebuild
         )
         return False
 
@@ -208,7 +202,7 @@ def complete_model_class(
     simplified_core_schema = inline_schema_defs(schema)
     cls.__pydantic_validator__ = SchemaValidator(simplified_core_schema, core_config)
     cls.__pydantic_serializer__ = SchemaSerializer(simplified_core_schema, core_config)
-    cls.__pydantic_model_complete__ = True
+    cls.__pydantic_complete__ = True
 
     # set __signature__ attr only for model class, but not for its instances
     cls.__signature__ = ClassAttribute(
@@ -258,7 +252,6 @@ def generate_model_signature(
                     use_var_kw = True
                     continue
 
-            # TODO: replace annotation with actual expected types once #1055 solved
             kwargs = {} if field.is_required() else {'default': field.get_default(call_default_factory=False)}
             merged_params[param_name] = Parameter(
                 param_name, Parameter.KEYWORD_ONLY, annotation=field.rebuild_annotation(), **kwargs
@@ -294,14 +287,29 @@ class MockValidator:
     Mocker for `pydantic_core.SchemaValidator` which just raises an error when one of its methods is accessed.
     """
 
-    __slots__ = '_error_message', '_code'
+    __slots__ = '_error_message', '_code', '_attempt_rebuild'
 
-    def __init__(self, error_message: str, *, code: PydanticErrorCodes) -> None:
+    def __init__(
+        self,
+        error_message: str,
+        *,
+        code: PydanticErrorCodes,
+        attempt_rebuild: Callable[[], SchemaValidator | None] | None = None,
+    ) -> None:
+        """
+        Attempt rebuild
+        """
         self._error_message = error_message
         self._code: PydanticErrorCodes = code
+        self._attempt_rebuild = attempt_rebuild
 
     def __getattr__(self, item: str) -> None:
         __tracebackhide__ = True
+        if self._attempt_rebuild:
+            validator = self._attempt_rebuild()
+            if validator is not None:
+                return getattr(validator, item)
+
         # raise an AttributeError if `item` doesn't exist
         getattr(SchemaValidator, item)
         raise PydanticUserError(self._error_message, code=self._code)

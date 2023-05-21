@@ -1,3 +1,4 @@
+import collections
 import itertools
 import json
 import math
@@ -6,7 +7,7 @@ import re
 import sys
 import typing
 import uuid
-from collections import OrderedDict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from enum import Enum, IntEnum
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import (
     Any,
     Callable,
+    Counter,
+    DefaultDict,
     Deque,
     Dict,
     FrozenSet,
@@ -31,8 +34,9 @@ from typing import (
 from uuid import UUID
 
 import annotated_types
+import dirty_equals
 import pytest
-from dirty_equals import HasRepr, IsStr
+from dirty_equals import HasRepr, IsOneOf, IsStr
 from pydantic_core import CoreSchema, PydanticCustomError, SchemaError, core_schema
 from pydantic_core.core_schema import ValidationInfo
 from typing_extensions import Annotated, Literal, TypedDict, get_args
@@ -88,12 +92,14 @@ from pydantic import (
     conlist,
     conset,
     constr,
+    field_serializer,
     field_validator,
+    validate_call,
 )
 from pydantic.annotated import GetCoreSchemaHandler
 from pydantic.errors import PydanticSchemaGenerationError
 from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
-from pydantic.types import AllowInfNan, ImportString, SecretField, Strict
+from pydantic.types import AllowInfNan, ImportString, SecretField, SkipValidation, Strict
 
 try:
     import email_validator
@@ -803,9 +809,9 @@ def test_string_import_callable(annotation):
         {
             'type': 'import_error',
             'loc': ('callable',),
-            'msg': 'Invalid python path: "foobar" doesn\'t look like a module path',
+            'msg': "Invalid python path: No module named 'foobar'",
             'input': 'foobar',
-            'ctx': {'error': '"foobar" doesn\'t look like a module path'},
+            'ctx': {'error': "No module named 'foobar'"},
         }
     ]
 
@@ -816,9 +822,9 @@ def test_string_import_callable(annotation):
         {
             'type': 'import_error',
             'loc': ('callable',),
-            'msg': 'Invalid python path: Module "os" does not define a "missing" attribute',
+            'msg': "Invalid python path: No module named 'os.missing'",
             'input': 'os.missing',
-            'ctx': {'error': 'Module "os" does not define a "missing" attribute'},
+            'ctx': {'error': "No module named 'os.missing'"},
         }
     ]
 
@@ -841,7 +847,7 @@ def test_string_import_any():
     class PyObjectModel(BaseModel):
         thing: ImportString
 
-    assert PyObjectModel(thing='math.cos').model_dump() == {'thing': math.cos}
+    assert PyObjectModel(thing='math:cos').model_dump() == {'thing': math.cos}
     assert PyObjectModel(thing='os.path').model_dump() == {'thing': os.path}
     assert PyObjectModel(thing=[1, 2, 3]).model_dump() == {'thing': [1, 2, 3]}
 
@@ -857,9 +863,92 @@ def test_string_import_constraints(annotation):
     class PyObjectModel(BaseModel):
         thing: annotation
 
-    assert PyObjectModel(thing='math.pi').model_dump() == {'thing': pytest.approx(3.141592654)}
+    assert PyObjectModel(thing='math:pi').model_dump() == {'thing': pytest.approx(3.141592654)}
     with pytest.raises(ValidationError, match='type=greater_than_equal'):
-        PyObjectModel(thing='math.e')
+        PyObjectModel(thing='math:e')
+
+
+def test_string_import_examples():
+    import collections
+
+    adapter = TypeAdapter(ImportString)
+    assert adapter.validate_python('collections') is collections
+    assert adapter.validate_python('collections.abc') is collections.abc
+    assert adapter.validate_python('collections.abc.Mapping') is collections.abc.Mapping
+    assert adapter.validate_python('collections.abc:Mapping') is collections.abc.Mapping
+
+
+@pytest.mark.parametrize(
+    'import_string,errors',
+    [
+        (
+            'collections.abc.def',
+            [
+                {
+                    'ctx': {'error': "No module named 'collections.abc.def'"},
+                    'input': 'collections.abc.def',
+                    'loc': (),
+                    'msg': "Invalid python path: No module named 'collections.abc.def'",
+                    'type': 'import_error',
+                }
+            ],
+        ),
+        (
+            'collections.abc:def',
+            [
+                {
+                    'ctx': {'error': "cannot import name 'def' from 'collections.abc'"},
+                    'input': 'collections.abc:def',
+                    'loc': (),
+                    'msg': "Invalid python path: cannot import name 'def' from 'collections.abc'",
+                    'type': 'import_error',
+                }
+            ],
+        ),
+        (
+            'collections:abc:Mapping',
+            [
+                {
+                    'ctx': {'error': "Import strings should have at most one ':'; received 'collections:abc:Mapping'"},
+                    'input': 'collections:abc:Mapping',
+                    'loc': (),
+                    'msg': "Invalid python path: Import strings should have at most one ':';"
+                    " received 'collections:abc:Mapping'",
+                    'type': 'import_error',
+                }
+            ],
+        ),
+        (
+            '123_collections:Mapping',
+            [
+                {
+                    'ctx': {'error': "No module named '123_collections'"},
+                    'input': '123_collections:Mapping',
+                    'loc': (),
+                    'msg': "Invalid python path: No module named '123_collections'",
+                    'type': 'import_error',
+                }
+            ],
+        ),
+        (
+            ':Mapping',
+            [
+                {
+                    'ctx': {'error': "Import strings should have a nonempty module name; received ':Mapping'"},
+                    'input': ':Mapping',
+                    'loc': (),
+                    'msg': 'Invalid python path: Import strings should have a nonempty module '
+                    "name; received ':Mapping'",
+                    'type': 'import_error',
+                }
+            ],
+        ),
+    ],
+)
+def test_string_import_errors(import_string, errors):
+    with pytest.raises(ValidationError) as exc_info:
+        TypeAdapter(ImportString).validate_python(import_string)
+    assert exc_info.value.errors() == errors
 
 
 def test_decimal():
@@ -1197,15 +1286,15 @@ class BoolCastable:
         ('list_check', ('1', '2'), ['1', '2']),
         ('list_check', {'1': 1, '2': 2}.keys(), ['1', '2']),
         ('list_check', {'1': '1', '2': '2'}.values(), ['1', '2']),
-        ('list_check', {'1', '2'}, ValidationError),
-        ('list_check', frozenset(['1', '2']), ValidationError),
+        ('list_check', {'1', '2'}, dirty_equals.IsOneOf(['1', '2'], ['2', '1'])),
+        ('list_check', frozenset(['1', '2']), dirty_equals.IsOneOf(['1', '2'], ['2', '1'])),
         ('list_check', {'1': 1, '2': 2}, ValidationError),
         ('tuple_check', ('1', '2'), ('1', '2')),
         ('tuple_check', ['1', '2'], ('1', '2')),
         ('tuple_check', {'1': 1, '2': 2}.keys(), ('1', '2')),
         ('tuple_check', {'1': '1', '2': '2'}.values(), ('1', '2')),
-        ('tuple_check', {'1', '2'}, ValidationError),
-        ('tuple_check', frozenset(['1', '2']), ValidationError),
+        ('tuple_check', {'1', '2'}, dirty_equals.IsOneOf(('1', '2'), ('2', '1'))),
+        ('tuple_check', frozenset(['1', '2']), dirty_equals.IsOneOf(('1', '2'), ('2', '1'))),
         ('tuple_check', {'1': 1, '2': 2}, ValidationError),
         ('set_check', {'1', '2'}, {'1', '2'}),
         ('set_check', ['1', '2', '1', '2'], {'1', '2'}),
@@ -1686,6 +1775,7 @@ def test_dict():
         ((1, 2, '3'), [1, 2, '3']),
         ((i**2 for i in range(5)), [0, 1, 4, 9, 16]),
         (deque([1, 2, 3]), [1, 2, 3]),
+        ({1, '2'}, IsOneOf([1, '2'], ['2', 1])),
     ),
 )
 def test_list_success(value, result):
@@ -1695,7 +1785,7 @@ def test_list_success(value, result):
     assert Model(v=value).v == result
 
 
-@pytest.mark.parametrize('value', (123, '123', {1, 2, '3'}))
+@pytest.mark.parametrize('value', (123, '123'))
 def test_list_fails(value):
     class Model(BaseModel):
         v: list
@@ -1735,6 +1825,7 @@ def test_ordered_dict():
         ((1, 2, '3'), (1, 2, '3')),
         ((i**2 for i in range(5)), (0, 1, 4, 9, 16)),
         (deque([1, 2, 3]), (1, 2, 3)),
+        ({1, '2'}, IsOneOf((1, '2'), ('2', 1))),
     ),
 )
 def test_tuple_success(value, result):
@@ -1744,7 +1835,7 @@ def test_tuple_success(value, result):
     assert Model(v=value).v == result
 
 
-@pytest.mark.parametrize('value', (123, '123', {1, 2, '3'}))
+@pytest.mark.parametrize('value', (123, '123'))
 def test_tuple_fails(value):
     class Model(BaseModel):
         v: tuple
@@ -4082,6 +4173,16 @@ def test_deque_success():
             {1: 10, 2: 20, 3: 30}.items(),
             deque([(1, 10), (2, 20), (3, 30)]),
         ),
+        (
+            float,
+            {1, 2, 3},
+            deque([1, 2, 3]),
+        ),
+        (
+            float,
+            frozenset((1, 2, 3)),
+            deque([1, 2, 3]),
+        ),
     ),
 )
 def test_deque_generic_success(cls, value, result):
@@ -4110,26 +4211,6 @@ def test_deque_generic_success_strict(cls, value: Any, result):
 @pytest.mark.parametrize(
     'cls,value,expected_error',
     (
-        (
-            float,
-            {1, 2, 3},
-            {
-                'type': 'list_type',
-                'loc': ('v',),
-                'msg': 'Input should be a valid list',
-                'input': {1, 2, 3},
-            },
-        ),
-        (
-            float,
-            frozenset((1, 2, 3)),
-            {
-                'type': 'list_type',
-                'loc': ('v',),
-                'msg': 'Input should be a valid list',
-                'input': frozenset((1, 2, 3)),
-            },
-        ),
         (
             int,
             [1, 'a', 3],
@@ -4740,3 +4821,255 @@ def test_sequence_subclass_without_core_schema() -> None:
 
         class _(BaseModel):
             x: MyList
+
+
+def test_typing_coercion_defaultdict():
+    class Model(BaseModel):
+        x: DefaultDict[int, str]
+
+    d = defaultdict(str)
+    d['1']
+    m = Model(x=d)
+    assert isinstance(m.x, defaultdict)
+    assert repr(m.x) == "defaultdict(<class 'str'>, {1: ''})"
+
+
+def test_typing_coercion_counter():
+    class Model(BaseModel):
+        x: Counter[str]
+
+    m = Model(x={'a': 10})
+    assert isinstance(m.x, Counter)
+    assert repr(m.x) == "Counter({'a': 10})"
+
+
+def test_typing_counter_value_validation():
+    class Model(BaseModel):
+        x: Counter[str]
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(x={'a': 'a'})
+
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'type': 'int_parsing',
+            'loc': ('x', 'a'),
+            'msg': 'Input should be a valid integer, unable to parse string as an integer',
+            'input': 'a',
+        }
+    ]
+
+
+def test_mapping_subclass_without_core_schema() -> None:
+    class MyDict(Dict[int, int]):
+        # The point of this is that subclasses can do arbitrary things
+        # This is the reason why we don't try to handle them automatically
+        # TBD if we introspect `__init__` / `__new__`
+        # (which is the main thing that would mess us up if modified in a subclass)
+        # and automatically handle cases where the subclass doesn't override it.
+        # There's still edge cases (again, arbitrary behavior...)
+        # and it's harder to explain, but could lead to a better user experience in some cases
+        # It will depend on how the complaints (which have and will happen in both directions)
+        # balance out
+        def __init__(self, *args: Any, required: int, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+
+    with pytest.raises(
+        PydanticSchemaGenerationError, match='implement `__get_pydantic_core_schema__` on your type to fully support it'
+    ):
+
+        class _(BaseModel):
+            x: MyDict
+
+
+def test_defaultdict_unknown_default_factory() -> None:
+    """
+    https://github.com/pydantic/pydantic/issues/4687
+    """
+    with pytest.raises(
+        PydanticSchemaGenerationError,
+        match=r'Unable to infer a default factory for with keys of type typing.DefaultDict\[int, int\]',
+    ):
+
+        class Model(BaseModel):
+            d: DefaultDict[int, DefaultDict[int, int]]
+
+
+def test_defaultdict_infer_default_factory() -> None:
+    class Model(BaseModel):
+        a: DefaultDict[int, List[int]]
+        b: DefaultDict[int, int]
+
+    m = Model(a={}, b={})
+    assert m.a.default_factory is not None
+    assert m.a.default_factory() == []
+    assert m.b.default_factory is not None
+    assert m.b.default_factory() == 0
+
+
+def test_defaultdict_explicit_default_factory() -> None:
+    class MyList(List[int]):
+        pass
+
+    class Model(BaseModel):
+        a: DefaultDict[int, Annotated[List[int], Field(default_factory=lambda: MyList())]]
+
+    m = Model(a={})
+    assert m.a.default_factory is not None
+    assert isinstance(m.a.default_factory(), MyList)
+
+
+def test_defaultdict_default_factory_preserved() -> None:
+    class Model(BaseModel):
+        a: DefaultDict[int, List[int]]
+
+    class MyList(List[int]):
+        pass
+
+    m = Model(a=defaultdict(lambda: MyList()))
+    assert m.a.default_factory is not None
+    assert isinstance(m.a.default_factory(), MyList)
+
+
+def test_custom_default_dict() -> None:
+    KT = TypeVar('KT')
+    VT = TypeVar('VT')
+
+    class CustomDefaultDict(DefaultDict[KT, VT]):
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            keys_type, values_type = get_args(source_type)
+            return core_schema.no_info_after_validator_function(
+                lambda x: cls(x.default_factory, x), handler(DefaultDict[keys_type, values_type])
+            )
+
+    ta = TypeAdapter(CustomDefaultDict[str, int])
+
+    assert ta.validate_python({'a': 1}) == CustomDefaultDict(int, {'a': 1})
+
+
+@pytest.mark.parametrize('field_type', [typing.OrderedDict, collections.OrderedDict])
+def test_ordered_dict_from_ordered_dict(field_type):
+    class Model(BaseModel):
+        od_field: field_type
+
+    od_value = collections.OrderedDict([('a', 1), ('b', 2)])
+
+    m = Model(od_field=od_value)
+
+    assert isinstance(m.od_field, collections.OrderedDict)
+    assert m.od_field == od_value
+    # we don't make any promises about preserving instances
+    # at the moment we always copy them for consistency and predictability
+    # so this is more so documenting the current behavior than a promise
+    # we make to users
+    assert m.od_field is not od_value
+
+    assert m.model_json_schema() == {
+        'properties': {'od_field': {'title': 'Od Field', 'type': 'object'}},
+        'required': ['od_field'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+def test_ordered_dict_from_ordered_dict_typed():
+    class Model(BaseModel):
+        od_field: typing.OrderedDict[str, int]
+
+    od_value = collections.OrderedDict([('a', 1), ('b', 2)])
+
+    m = Model(od_field=od_value)
+
+    assert isinstance(m.od_field, collections.OrderedDict)
+    assert m.od_field == od_value
+
+    assert m.model_json_schema() == {
+        'properties': {
+            'od_field': {
+                'additionalProperties': {'type': 'integer'},
+                'title': 'Od Field',
+                'type': 'object',
+            }
+        },
+        'required': ['od_field'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize('field_type', [typing.OrderedDict, collections.OrderedDict])
+def test_ordered_dict_from_dict(field_type):
+    class Model(BaseModel):
+        od_field: field_type
+
+    od_value = {'a': 1, 'b': 2}
+
+    m = Model(od_field=od_value)
+
+    assert isinstance(m.od_field, collections.OrderedDict)
+    assert m.od_field == collections.OrderedDict(od_value)
+
+    assert m.model_json_schema() == {
+        'properties': {'od_field': {'title': 'Od Field', 'type': 'object'}},
+        'required': ['od_field'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+def test_handle_3rd_party_custom_type_reusing_known_metadata() -> None:
+    class PdDecimal(Decimal):
+        def ___repr__(self) -> str:
+            return f'PdDecimal({super().__repr__()})'
+
+    class PdDecimalMarker:
+        def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(PdDecimal, handler(source_type))
+
+        def __prepare_pydantic_annotations__(self, source: Any, annotations: List[Any]) -> Tuple[Any, List[Any]]:
+            return (Decimal, [self, *annotations])
+
+    class Model(BaseModel):
+        x: Annotated[PdDecimal, PdDecimalMarker(), annotated_types.Gt(0)]
+
+    assert isinstance(Model(x=1).x, PdDecimal)
+    with pytest.raises(ValidationError) as exc_info:
+        Model(x=-1)
+    assert exc_info.value.errors(include_url=False) == [
+        {'type': 'greater_than', 'loc': ('x',), 'msg': 'Input should be greater than 0', 'input': -1, 'ctx': {'gt': 0}}
+    ]
+
+
+def test_skip_validation():
+    @validate_call
+    def my_function(y: Annotated[int, SkipValidation]):
+        return repr(y)
+
+    assert my_function('2') == "'2'"
+
+
+def test_skip_validation_serialization():
+    class A(BaseModel):
+        x: SkipValidation[int]
+
+        @field_serializer('x')
+        def double_x(self, v):
+            return v * 2
+
+    assert A(x=1).model_dump() == {'x': 2}
+    assert A(x='abc').model_dump() == {'x': 'abcabc'}  # no validation
+    assert A(x='abc').model_dump_json() == '{"x":"abcabc"}'
+
+
+def test_skip_validation_json_schema():
+    class A(BaseModel):
+        x: SkipValidation[int]
+
+    assert A.model_json_schema() == {
+        'properties': {'x': {'title': 'X', 'type': 'integer'}},
+        'required': ['x'],
+        'title': 'A',
+        'type': 'object',
+    }

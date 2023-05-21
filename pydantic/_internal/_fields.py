@@ -9,12 +9,14 @@ from copy import copy
 from typing import TYPE_CHECKING, Any
 
 from . import _typing_extra
+from ._config import ConfigWrapper
 from ._forward_ref import PydanticForwardRef
 from ._repr import Representation
 from ._typing_extra import get_cls_type_hints_lenient, get_type_hints, is_classvar, is_finalvar
 
 if TYPE_CHECKING:
     from ..fields import FieldInfo
+    from ..main import BaseModel
     from ._dataclasses import StandardDataclass
 
 
@@ -69,8 +71,9 @@ class PydanticGeneralMetadata(PydanticMetadata):
 
 
 def collect_model_fields(  # noqa: C901
-    cls: type[Any],
+    cls: type[BaseModel],
     bases: tuple[type[Any], ...],
+    config_wrapper: ConfigWrapper,
     types_namespace: dict[str, Any] | None,
     *,
     typevars_map: dict[Any, Any] | None = None,
@@ -97,6 +100,9 @@ def collect_model_fields(  # noqa: C901
 
     class_vars: set[str] = set()
     for ann_name, ann_type in type_hints.items():
+        for protected_namespace in config_wrapper.protected_namespaces:
+            if ann_name.startswith(protected_namespace):
+                raise NameError(f'Field "{ann_name}" has conflict with protected namespace "{protected_namespace}"')
         if is_classvar(ann_type):
             class_vars.add(ann_name)
             continue
@@ -105,6 +111,10 @@ def collect_model_fields(  # noqa: C901
             continue
         if ann_name.startswith('_'):
             continue
+        if cls.__pydantic_root_model__ and ann_name != 'root':
+            raise NameError(
+                f"Unexpected field with name {ann_name!r}; only 'root' is allowed as a field of a `RootModel`"
+            )
 
         # when building a generic model with `MyModel[int]`, the generic_origin check makes sure we don't get
         # "... shadows an attribute" errors
@@ -189,7 +199,7 @@ def collect_dataclass_fields(
 
         if not dataclass_field.init:
             # TODO: We should probably do something with this so that validate_assignment behaves properly
-            #   See https://github.com/pydantic/pydantic/issues/5470
+            #   Issue: https://github.com/pydantic/pydantic/issues/5470
             continue
 
         if isinstance(dataclass_field.default, FieldInfo):

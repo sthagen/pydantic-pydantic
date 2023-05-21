@@ -23,7 +23,7 @@ from typing import (
 
 import pytest
 from dirty_equals import HasRepr, IsStr
-from pydantic_core import PydanticSerializationError, core_schema
+from pydantic_core import ErrorDetails, InitErrorDetails, PydanticSerializationError, core_schema
 from typing_extensions import Annotated, get_args
 
 from pydantic import (
@@ -1897,7 +1897,6 @@ def test_required_any():
     }
 
 
-@pytest.mark.xfail(reason='need to modify loc of ValidationError')
 def test_custom_generic_validators():
     T1 = TypeVar('T1')
     T2 = TypeVar('T2')
@@ -1921,12 +1920,27 @@ def test_custom_generic_validators():
             t1_f = TypeAdapter(args[0]).validate_python
             t2_f = TypeAdapter(args[1]).validate_python
 
-            def validate(v, info):
+            def convert_to_init_error(e: ErrorDetails, loc: str) -> InitErrorDetails:
+                init_e = {'type': e['type'], 'loc': e['loc'] + (loc,), 'input': e['input']}
+                if 'ctx' in e:
+                    init_e['ctx'] = e['ctx']
+                return init_e
+
+            def validate(v, _info):
                 if not args:
                     return v
-                # TODO: Collect these errors, rather than stopping early, and modify the loc to make the test pass
-                t1_f(v.t1)
-                t2_f(v.t2)
+                try:
+                    v.t1 = t1_f(v.t1)
+                except ValidationError as exc:
+                    raise ValidationError.from_exception_data(
+                        exc.title, [convert_to_init_error(e, 't1') for e in exc.errors()]
+                    ) from exc
+                try:
+                    v.t2 = t2_f(v.t2)
+                except ValidationError as exc:
+                    raise ValidationError.from_exception_data(
+                        exc.title, [convert_to_init_error(e, 't2') for e in exc.errors()]
+                    ) from exc
                 return v
 
             return core_schema.general_after_validator_function(validate, schema)
@@ -2402,8 +2416,6 @@ def test_generic_wrapped_forwardref():
     class Operation(BaseModel):
         callbacks: list['PathItem']
 
-        model_config = {'undefined_types_warning': False}
-
     class PathItem(BaseModel):
         pass
 
@@ -2450,13 +2462,10 @@ def test_invalid_forward_ref_model():
     with pytest.raises(error, **kwargs):
 
         class M(BaseModel):
-            model_config = {'undefined_types_warning': False}
             B: ForwardRef('B') = Field(default=None)
 
     # The solution:
     class A(BaseModel):
-        model_config = {'undefined_types_warning': False}
-
         B: ForwardRef('__types["B"]') = Field()  # F821
 
     assert A.model_fields['B'].annotation == ForwardRef('__types["B"]')  # F821
@@ -2469,10 +2478,10 @@ def test_invalid_forward_ref_model():
     class C(BaseModel):
         pass
 
-    assert not A.__pydantic_model_complete__
+    assert not A.__pydantic_complete__
     types = {'B': B}
     A.model_rebuild(_types_namespace={'__types': types})
-    assert A.__pydantic_model_complete__
+    assert A.__pydantic_complete__
 
     assert A(B=B()).B == B()
     with pytest.raises(ValidationError) as exc_info:

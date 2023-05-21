@@ -24,10 +24,10 @@ def test_create_model():
     assert model.__name__ == 'FooModel'
     assert model.model_fields.keys() == {'foo', 'bar'}
 
-    assert not model.__pydantic_decorators__.validator
-    assert not model.__pydantic_decorators__.root_validator
-    assert not model.__pydantic_decorators__.field_validator
-    assert not model.__pydantic_decorators__.field_serializer
+    assert not model.__pydantic_decorators__.validators
+    assert not model.__pydantic_decorators__.root_validators
+    assert not model.__pydantic_decorators__.field_validators
+    assert not model.__pydantic_decorators__.field_serializers
 
     assert model.__module__ == 'pydantic.main'
 
@@ -225,29 +225,6 @@ def test_dynamic_and_static():
         assert A.model_fields[field_name].default == DynamicA.model_fields[field_name].default
 
 
-def test_config_field_info_create_model():
-    # TODO fields doesn't exist anymore, remove test?
-    # class Config:
-    #     fields = {'a': {'description': 'descr'}}
-    ConfigDict()
-
-    m1 = create_model('M1', __config__={'title': 'abc'}, a=(str, ...))
-    assert m1.model_json_schema() == {
-        'properties': {'a': {'title': 'A', 'type': 'string'}},
-        'required': ['a'],
-        'title': 'abc',
-        'type': 'object',
-    }
-
-    m2 = create_model('M2', __config__={}, a=(str, Field(description='descr')))
-    assert m2.model_json_schema() == {
-        'properties': {'a': {'description': 'descr', 'title': 'A', 'type': 'string'}},
-        'required': ['a'],
-        'title': 'M2',
-        'type': 'object',
-    }
-
-
 @pytest.mark.parametrize('base', [ModelPrivateAttr, object])
 def test_set_name(base):
     calls = []
@@ -338,3 +315,29 @@ def test_create_model_tuple():
 def test_create_model_tuple_3():
     with pytest.raises(PydanticUserError, match=r'^Field definitions should either be a `\(<type>, <default>\)`\.\n'):
         create_model('FooModel', foo=(Tuple[int, int], (1, 2), 'more'))
+
+
+def test_create_model_protected_namespace_default():
+    with pytest.raises(NameError, match='Field "model_prefixed_field" has conflict with protected namespace "model_"'):
+        create_model('Model', model_prefixed_field=(str, ...))
+
+
+def test_create_model_custom_protected_namespace():
+    with pytest.raises(NameError, match='Field "test_field" has conflict with protected namespace "test_"'):
+        create_model(
+            'Model',
+            __config__=ConfigDict(protected_namespaces=('test_',)),
+            model_prefixed_field=(str, ...),
+            test_field=(str, ...),
+        )
+
+
+def test_create_model_multiple_protected_namespace():
+    with pytest.raises(
+        NameError, match='Field "also_protect_field" has conflict with protected namespace "also_protect_"'
+    ):
+        create_model(
+            'Model',
+            __config__=ConfigDict(protected_namespaces=('protect_me_', 'also_protect_')),
+            also_protect_field=(str, ...),
+        )
