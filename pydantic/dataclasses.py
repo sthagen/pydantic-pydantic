@@ -6,14 +6,12 @@ from __future__ import annotations as _annotations
 import dataclasses
 import sys
 import types
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, NoReturn, TypeVar, overload
 
 from typing_extensions import Literal, dataclass_transform
 
-from ._internal import _config, _decorators
+from ._internal import _config, _decorators, _typing_extra
 from ._internal import _dataclasses as _pydantic_dataclasses
-from ._internal._dataclasses import is_builtin_dataclass
-from ._internal._dataclasses import rebuild_dataclass as rebuild_dataclass
 from ._migration import getattr_migration
 from .config import ConfigDict
 from .fields import Field
@@ -40,6 +38,7 @@ if sys.version_info >= (3, 10):
         config: ConfigDict | type[object] | None = None,
         validate_on_init: bool | None = None,
         kw_only: bool = ...,
+        slots: bool = ...,
     ) -> Callable[[type[_T]], type[PydanticDataclass]]:  # type: ignore
         """Overload for `dataclass`."""
         ...
@@ -58,6 +57,7 @@ if sys.version_info >= (3, 10):
         config: ConfigDict | type[object] | None = None,
         validate_on_init: bool | None = None,
         kw_only: bool = ...,
+        slots: bool = ...,
     ) -> type[PydanticDataclass]:
         """Overload for `dataclass`."""
         ...
@@ -111,6 +111,7 @@ def dataclass(
     config: ConfigDict | type[object] | None = None,
     validate_on_init: bool | None = None,
     kw_only: bool = False,
+    slots: bool = False,
 ) -> Callable[[type[_T]], type[PydanticDataclass]] | type[PydanticDataclass]:
     """
     A decorator used to create a Pydantic-enhanced dataclass, similar to the standard Python `dataclasses`,
@@ -142,7 +143,7 @@ def dataclass(
     assert init is False, 'pydantic.dataclasses.dataclass only supports init=False'
 
     if sys.version_info >= (3, 10):
-        kwargs = dict(kw_only=kw_only)
+        kwargs = dict(kw_only=kw_only, slots=slots)
     else:
         kwargs = {}
 
@@ -169,7 +170,7 @@ def dataclass(
         # since dataclasses.dataclass will set this as the __doc__
         original_doc = cls.__doc__
 
-        if is_builtin_dataclass(cls):
+        if _pydantic_dataclasses.is_builtin_dataclass(cls):
             # Don't preserve the docstring for vanilla dataclasses, as it may include the signature
             # This matches v1 behavior, and there was an explicit test for it
             original_doc = None
@@ -211,3 +212,64 @@ def dataclass(
 
 
 __getattr__ = getattr_migration(__name__)
+
+if (3, 8) <= sys.version_info < (3, 11):
+    # Monkeypatch dataclasses.InitVar so that typing doesn't error if it occurs as a type when evaluating type hints
+    # Starting in 3.11, typing.get_type_hints will not raise an error if the retrieved type hints are not callable.
+
+    def _call_initvar(*args: Any, **kwargs: Any) -> NoReturn:
+        """
+        This function does nothing but raise an error that is as similar as possible to what you'd get
+        if you were to try calling `InitVar[int]()` without this monkeypatch. The whole purpose is just
+        to ensure typing._type_check does not error if the type hint evaluates to `InitVar[<parameter>]`.
+        """
+        raise TypeError("'InitVar' object is not callable")
+
+    dataclasses.InitVar.__call__ = _call_initvar  # type: ignore
+
+
+def rebuild_dataclass(
+    cls: type[PydanticDataclass],
+    *,
+    force: bool = False,
+    raise_errors: bool = True,
+    _parent_namespace_depth: int = 2,
+    _types_namespace: dict[str, Any] | None = None,
+) -> bool | None:
+    """
+    Try to rebuild or reconstruct the dataclass core schema.
+
+    This is analogous to `BaseModel.model_rebuild`.
+
+    Args:
+        cls (type): The class to build the dataclass core schema for.
+        force (bool): Whether to force the rebuilding of the model schema, defaults to `False`.
+        raise_errors (bool): Whether to raise errors, defaults to `True`.
+        _parent_namespace_depth (int): The depth level of the parent namespace, defaults to 2.
+        _types_namespace (dict[str, Any] | None): The types namespace, defaults to `None`.
+
+    Returns:
+        bool or None: Returns `None` if model schema is complete and no rebuilding is required.
+            If rebuilding _is_ required, returns `True` if rebuilding was successful, otherwise `False`.
+    """
+    if not force and cls.__pydantic_complete__:
+        return None
+    else:
+        if _types_namespace is not None:
+            types_namespace: dict[str, Any] | None = _types_namespace.copy()
+        else:
+            if _parent_namespace_depth > 0:
+                frame_parent_ns = _typing_extra.parent_frame_namespace(parent_depth=_parent_namespace_depth) or {}
+                # Note: we may need to add something similar to cls.__pydantic_parent_namespace__ from BaseModel
+                #   here when implementing handling of recursive generics. See BaseModel.model_rebuild for reference.
+                types_namespace = frame_parent_ns
+            else:
+                types_namespace = {}
+
+            types_namespace = _typing_extra.get_cls_types_namespace(cls, types_namespace)
+        return _pydantic_dataclasses.complete_dataclass(
+            cls,
+            _config.ConfigWrapper(cls.__pydantic_config__, check=False),
+            raise_errors=raise_errors,
+            types_namespace=types_namespace,
+        )

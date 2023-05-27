@@ -20,6 +20,7 @@ from ._fields import collect_dataclass_fields
 from ._generate_schema import GenerateSchema
 from ._generics import get_standard_typevars_map
 from ._model_construction import MockValidator
+from ._schema_generation_shared import CallbackGetCoreSchemaHandler
 
 if typing.TYPE_CHECKING:
     from ..config import ConfigDict
@@ -98,7 +99,13 @@ def complete_dataclass(
     get_core_schema = getattr(cls, '__get_pydantic_core_schema__', None)
     try:
         if get_core_schema:
-            schema = get_core_schema(cls, partial(gen_schema.generate_schema, from_dunder_get_core_schema=False))
+            schema = get_core_schema(
+                cls,
+                CallbackGetCoreSchemaHandler(
+                    partial(gen_schema.generate_schema, from_dunder_get_core_schema=False),
+                    gen_schema.generate_schema,
+                ),
+            )
         else:
             schema = gen_schema.generate_schema(cls, from_dunder_get_core_schema=False)
     except PydanticUndefinedAnnotation as e:
@@ -112,6 +119,8 @@ def complete_dataclass(
         )
 
         def attempt_rebuild() -> SchemaValidator | None:
+            from ..dataclasses import rebuild_dataclass
+
             if rebuild_dataclass(cls, raise_errors=False, _parent_namespace_depth=5):
                 return cls.__pydantic_validator__  # type: ignore
             else:
@@ -174,51 +183,4 @@ def is_builtin_dataclass(_cls: type[Any]) -> TypeGuard[type[StandardDataclass]]:
 
 
 def is_pydantic_dataclass(_cls: type[Any]) -> TypeGuard[type[PydanticDataclass]]:
-    return dataclasses.is_dataclass(_cls) and hasattr(_cls, '__pydantic_validator__')
-
-
-def rebuild_dataclass(
-    cls: type[PydanticDataclass],
-    *,
-    force: bool = False,
-    raise_errors: bool = True,
-    _parent_namespace_depth: int = 2,
-    _types_namespace: dict[str, Any] | None = None,
-) -> bool | None:
-    """
-    Try to rebuild or reconstruct the dataclass core schema.
-
-    This is analogous to `BaseModel.model_rebuild`.
-
-    Args:
-        cls (type): The class to build the dataclass core schema for.
-        force (bool): Whether to force the rebuilding of the model schema, defaults to `False`.
-        raise_errors (bool): Whether to raise errors, defaults to `True`.
-        _parent_namespace_depth (int): The depth level of the parent namespace, defaults to 2.
-        _types_namespace (dict[str, Any] | None): The types namespace, defaults to `None`.
-
-    Returns:
-        bool or None: Returns `None` if model schema is complete and no rebuilding is required.
-            If rebuilding _is_ required, returns `True` if rebuilding was successful, otherwise `False`.
-    """
-    if not force and cls.__pydantic_complete__:
-        return None
-    else:
-        if _types_namespace is not None:
-            types_namespace: dict[str, Any] | None = _types_namespace.copy()
-        else:
-            if _parent_namespace_depth > 0:
-                frame_parent_ns = _typing_extra.parent_frame_namespace(parent_depth=_parent_namespace_depth) or {}
-                # Note: we may need to add something similar to cls.__pydantic_parent_namespace__ from BaseModel
-                #   here when implementing handling of recursive generics. See BaseModel.model_rebuild for reference.
-                types_namespace = frame_parent_ns
-            else:
-                types_namespace = {}
-
-            types_namespace = _typing_extra.get_cls_types_namespace(cls, types_namespace)
-        return complete_dataclass(
-            cls,
-            _config.ConfigWrapper(cls.__pydantic_config__, check=False),
-            raise_errors=raise_errors,
-            types_namespace=types_namespace,
-        )
+    return dataclasses.is_dataclass(_cls) and '__pydantic_validator__' in _cls.__dict__

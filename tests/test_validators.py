@@ -212,8 +212,8 @@ def test_int_validation():
         }
     ]
 
-    # Doesn't raise ValidationError for number > (2 ^ 63) - 1 and limits them to (2 ^ 63) - 1
-    assert Model(a=(2**63) + 100).a == (2**63) - 1
+    # Doesn't raise ValidationError for number > (2 ^ 63) - 1
+    assert Model(a=(2**63) + 100).a == (2**63) + 100
 
 
 @pytest.mark.parametrize('value', [2.2250738585072011e308, float('nan'), float('inf')])
@@ -1563,9 +1563,7 @@ def test_assignment_validator_cls():
     assert validator_calls == 2
 
 
-@pytest.mark.xfail(
-    sys.version_info[:2] == (3, 8), reason='https://github.com/python/cpython/issues/103592', strict=False
-)
+@pytest.mark.skipif(sys.version_info[:2] == (3, 8), reason='https://github.com/python/cpython/issues/103592')
 def test_literal_validator():
     class Model(BaseModel):
         a: Literal['foo']
@@ -1606,7 +1604,7 @@ def test_literal_validator_str_enum():
     assert my_foo.fizfuz is Bar.FUZ
 
 
-@pytest.mark.xfail(
+@pytest.mark.skipif(
     sys.version_info[:2] == (3, 8), reason='https://github.com/python/cpython/issues/103592', strict=False
 )
 def test_nested_literal_validator():
@@ -2527,3 +2525,32 @@ def test_validator_with_underscore_name() -> None:
         _normalize_name = field_validator('name')(f)
 
     assert Model(name='Adrian').name == 'adrian'
+
+
+@pytest.mark.parametrize(
+    'mode,config,input_str',
+    (
+        ('before', {}, "type=value_error, input_value='123', input_type=str"),
+        ('before', {'hide_input_in_errors': False}, "type=value_error, input_value='123', input_type=str"),
+        ('before', {'hide_input_in_errors': True}, 'type=value_error'),
+        ('after', {}, "type=value_error, input_value='123', input_type=str"),
+        ('after', {'hide_input_in_errors': False}, "type=value_error, input_value='123', input_type=str"),
+        ('after', {'hide_input_in_errors': True}, 'type=value_error'),
+        ('plain', {}, "type=value_error, input_value='123', input_type=str"),
+        ('plain', {'hide_input_in_errors': False}, "type=value_error, input_value='123', input_type=str"),
+        ('plain', {'hide_input_in_errors': True}, 'type=value_error'),
+    ),
+)
+def test_validator_function_error_hide_input(mode, config, input_str):
+    class Model(BaseModel):
+        x: str
+
+        model_config = ConfigDict(**config)
+
+        @field_validator('x', mode=mode)
+        @classmethod
+        def check_a1(cls, v: str) -> str:
+            raise ValueError('foo')
+
+    with pytest.raises(ValidationError, match=re.escape(f'Value error, foo [{input_str}]')):
+        Model(x='123')

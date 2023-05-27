@@ -2,7 +2,9 @@ import dataclasses
 import pickle
 import re
 import sys
+import traceback
 from collections.abc import Hashable
+from dataclasses import InitVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, Generic, List, Optional, Set, TypeVar, Union
@@ -20,6 +22,7 @@ from pydantic import (
     PydanticUserError,
     TypeAdapter,
     ValidationError,
+    field_serializer,
     field_validator,
 )
 from pydantic._internal._model_construction import MockValidator
@@ -723,26 +726,28 @@ def test_hashable_required():
     ]
 
 
-@pytest.mark.parametrize(
-    'default',
-    [
-        1,
-        None,
-        pytest.param(
-            ...,
-            marks=pytest.mark.xfail(
-                reason='... makes field required: https://github.com/pydantic/pydantic/issues/5488'
-            ),
-        ),
-    ],
-)
-def test_hashable_optional(default):
+@pytest.mark.parametrize('default', [1, None])
+def test_default_value(default):
     @pydantic.dataclasses.dataclass
     class MyDataclass:
-        v: Hashable = default
+        v: int = default
 
-    MyDataclass()
-    MyDataclass(v=None)
+    assert dataclasses.asdict(MyDataclass()) == {'v': default}
+    assert dataclasses.asdict(MyDataclass(v=42)) == {'v': 42}
+
+
+def test_default_value_ellipsis():
+    """
+    https://github.com/pydantic/pydantic/issues/5488
+    """
+
+    @pydantic.dataclasses.dataclass
+    class MyDataclass:
+        v: int = ...
+
+    assert dataclasses.asdict(MyDataclass(v=42)) == {'v': 42}
+    with pytest.raises(ValidationError, match='type=missing'):
+        MyDataclass()
 
 
 def test_override_builtin_dataclass():
@@ -801,7 +806,6 @@ def test_override_builtin_dataclass_2():
     assert f.seen_count == 7
 
 
-@pytest.mark.xfail(reason='TODO we need to optionally run validation even on exact types')
 def test_override_builtin_dataclass_nested():
     @dataclasses.dataclass
     class Meta:
@@ -813,10 +817,7 @@ def test_override_builtin_dataclass_nested():
         filename: str
         meta: Meta
 
-    class Foo(BaseModel):
-        file: File
-
-    FileChecked = pydantic.dataclasses.dataclass(File)
+    FileChecked = pydantic.dataclasses.dataclass(File, config=ConfigDict(revalidate_instances='always'))
     f = FileChecked(filename=b'thefilename', meta=Meta(modified_date='2020-01-01T00:00', seen_count='7'))
     assert f.filename == 'thefilename'
     assert f.meta.modified_date == datetime(2020, 1, 1, 0, 0)
@@ -824,9 +825,15 @@ def test_override_builtin_dataclass_nested():
 
     with pytest.raises(ValidationError) as e:
         FileChecked(filename=b'thefilename', meta=Meta(modified_date='2020-01-01T00:00', seen_count=['7']))
+    # insert_assert(e.value.errors(include_url=False))
     assert e.value.errors(include_url=False) == [
-        {'loc': ('meta', 'seen_count'), 'msg': 'value is not a valid integer', 'type': 'type_error.integer'}
+        {'type': 'int_type', 'loc': ('meta', 'seen_count'), 'msg': 'Input should be a valid integer', 'input': ['7']}
     ]
+
+    class Foo(
+        BaseModel,
+    ):
+        file: File
 
     foo = Foo.model_validate(
         {
@@ -1339,8 +1346,11 @@ def test_post_init_after_validation():
     assert Model.model_validate_json(json_text).model_dump() == model.model_dump()
 
 
-@pytest.mark.xfail(reason='pydantic dataclasses currently do not preserve sunder attributes set in __new__')
-def test_keeps_custom_properties():
+def test_new_not_called():
+    """
+    pydantic dataclasses do not preserve sunder attributes set in __new__
+    """
+
     class StandardClass:
         """Class which modifies instance creation."""
 
@@ -1356,13 +1366,15 @@ def test_keeps_custom_properties():
     StandardLibDataclass = dataclasses.dataclass(StandardClass)
     PydanticDataclass = pydantic.dataclasses.dataclass(StandardClass)
 
-    clases_to_test = [StandardLibDataclass, PydanticDataclass]
-
     test_string = 'string'
-    for cls in clases_to_test:
-        instance = cls(a=test_string)
-        assert instance._special_property == 1
-        assert instance.a == test_string
+
+    std_instance = StandardLibDataclass(a=test_string)
+    assert std_instance._special_property == 1
+    assert std_instance.a == test_string
+
+    pyd_instance = PydanticDataclass(a=test_string)
+    assert not hasattr(pyd_instance, '_special_property')
+    assert pyd_instance.a == test_string
 
 
 def test_ignore_extra():
@@ -1577,6 +1589,52 @@ def test_kw_only():
     assert A(b='hi').b == 'hi'
 
 
+def dataclass_decorators(include_identity: bool = False, exclude_combined: bool = False):
+    decorators = [pydantic.dataclasses.dataclass, dataclasses.dataclass]
+    ids = ['pydantic', 'stdlib']
+
+    if not exclude_combined:
+
+        def combined_decorator(cls):
+            """
+            Should be equivalent to:
+            @pydantic.dataclasses.dataclass
+            @dataclasses.dataclass
+            """
+            return pydantic.dataclasses.dataclass(dataclasses.dataclass(cls))
+
+        decorators.append(combined_decorator)
+        ids.append('combined')
+
+    if include_identity:
+
+        def identity_decorator(cls):
+            return cls
+
+        decorators.append(identity_decorator)
+        ids.append('identity')
+
+    return {'argvalues': decorators, 'ids': ids}
+
+
+@pytest.mark.skipif(sys.version_info < (3, 10), reason='kw_only is not available in python < 3.10')
+@pytest.mark.parametrize('decorator1', **dataclass_decorators(exclude_combined=True))
+@pytest.mark.parametrize('decorator2', **dataclass_decorators(exclude_combined=True))
+def test_kw_only_inheritance(decorator1, decorator2):
+    # Exclude combined from the decorators since it doesn't know how to accept kw_only
+    @decorator1(kw_only=True)
+    class Parent:
+        x: int
+
+    @decorator2
+    class Child(Parent):
+        y: int
+
+    child = Child(1, x=2)
+    assert child.x == 2
+    assert child.y == 1
+
+
 def test_extra_forbid_list_no_error():
     @pydantic.dataclasses.dataclass(config=dict(extra='forbid'))
     class Bar:
@@ -1731,7 +1789,7 @@ def test_validator_info_field_name_data_before():
             ['parent before', 'parent', 'parent after'],
             ['parent before', 'child', 'parent after', 'child before', 'child after'],
         ),
-        (dataclasses.dataclass, [], ['child before', 'child', 'child after']),
+        (dataclasses.dataclass, [], ['parent before', 'child', 'parent after', 'child before', 'child after']),
     ],
     ids=['pydantic', 'stdlib'],
 )
@@ -1851,26 +1909,6 @@ def test_dataclass_config_validate_default():
     ]
 
 
-def dataclass_decorators(identity: bool = False):
-    def combined(cls):
-        """
-        Should be equivalent to:
-        @pydantic.dataclasses.dataclass
-        @dataclasses.dataclass
-        """
-        return pydantic.dataclasses.dataclass(dataclasses.dataclass(cls))
-
-    def identity_decorator(cls):
-        return cls
-
-    decorators = [pydantic.dataclasses.dataclass, dataclasses.dataclass, combined]
-    ids = ['pydantic', 'stdlib', 'combined']
-    if identity:
-        decorators.append(identity_decorator)
-        ids.append('identity')
-    return {'argvalues': decorators, 'ids': ids}
-
-
 @pytest.mark.parametrize('dataclass_decorator', **dataclass_decorators())
 def test_unparametrized_generic_dataclass(dataclass_decorator):
     T = TypeVar('T')
@@ -1933,7 +1971,7 @@ def test_parametrized_generic_dataclass(dataclass_decorator, annotation, input_v
         assert exc_info.value.errors(include_url=False) == output_value
 
 
-@pytest.mark.parametrize('dataclass_decorator', **dataclass_decorators(identity=True))
+@pytest.mark.parametrize('dataclass_decorator', **dataclass_decorators(include_identity=True))
 def test_pydantic_dataclass_preserves_metadata(dataclass_decorator: Callable[[Any], Any]) -> None:
     @dataclass_decorator
     class FooStd:
@@ -2004,3 +2042,174 @@ def test_dataclass_alias_generator():
             'input': ArgsKwargs((), {'name': 'test name', 'score': 2}),
         },
     ]
+
+
+@pytest.mark.skipif(sys.version_info < (3, 8), reason='InitVar not supported in python 3.7')
+def test_init_vars_inheritance():
+    init_vars = []
+
+    @pydantic.dataclasses.dataclass
+    class Foo:
+        init: 'InitVar[int]'
+
+    @pydantic.dataclasses.dataclass
+    class Bar(Foo):
+        arg: int
+
+        def __post_init__(self, init: int) -> None:
+            init_vars.append(init)
+
+    bar = Bar(init=1, arg=2)
+    assert TypeAdapter(Bar).dump_python(bar) == {'arg': 2}
+    assert init_vars == [1]
+
+    with pytest.raises(ValidationError) as exc_info:
+        Bar(init='a', arg=2)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'input': 'a',
+            'loc': ('init',),
+            'msg': 'Input should be a valid integer, unable to parse string as an integer',
+            'type': 'int_parsing',
+        }
+    ]
+
+
+@pytest.mark.skipif(not hasattr(pydantic.dataclasses, '_call_initvar'), reason='InitVar was not modified')
+@pytest.mark.parametrize('remove_monkeypatch', [True, False])
+def test_init_vars_call_monkeypatch(remove_monkeypatch, monkeypatch):
+    # Parametrizing like this allows us to test that the behavior is the same with or without the monkeypatch
+
+    if remove_monkeypatch:
+        monkeypatch.delattr(InitVar, '__call__')
+
+    InitVar(int)  # this is what is produced by InitVar[int]; note monkeypatching __call__ doesn't break this
+
+    with pytest.raises(TypeError, match="'InitVar' object is not callable") as exc:
+        InitVar[int]()
+
+    # Check that the custom __call__ was called precisely if the monkeypatch was not removed
+    stack_depth = len(traceback.extract_tb(exc.value.__traceback__))
+    assert stack_depth == 1 if remove_monkeypatch else 2
+
+
+@pytest.mark.parametrize('decorator1', **dataclass_decorators())
+@pytest.mark.parametrize('decorator2', **dataclass_decorators())
+def test_decorators_in_model_field(decorator1, decorator2):
+    @decorator1
+    class Demo1:
+        int1: int
+
+        @field_validator('int1', mode='before')
+        def set_int_1(cls, v):
+            return v + 100
+
+        @field_serializer('int1')
+        def serialize_int_1(self, v):
+            return v + 10
+
+    @decorator2
+    class Demo2(Demo1):
+        int2: int
+
+        @field_validator('int2', mode='before')
+        def set_int_2(cls, v):
+            return v + 200
+
+        @field_serializer('int2')
+        def serialize_int_2(self, v):
+            return v + 20
+
+    class Model(BaseModel):
+        x: Demo2
+
+    m = Model.model_validate(dict(x=dict(int1=1, int2=2)))
+    assert m.x.int1 == 101
+    assert m.x.int2 == 202
+
+    assert m.model_dump() == {'x': {'int1': 111, 'int2': 222}}
+
+
+@pytest.mark.parametrize('decorator1', **dataclass_decorators())
+@pytest.mark.parametrize('decorator2', **dataclass_decorators())
+def test_vanilla_dataclass_decorators_in_type_adapter(decorator1, decorator2):
+    @decorator1
+    class Demo1:
+        int1: int
+
+        @field_validator('int1', mode='before')
+        def set_int_1(cls, v):
+            return v + 100
+
+        @field_serializer('int1')
+        def serialize_int_1(self, v):
+            return v + 10
+
+    @decorator2
+    class Demo2(Demo1):
+        int2: int
+
+        @field_validator('int2', mode='before')
+        def set_int_2(cls, v):
+            return v + 200
+
+        @field_serializer('int2')
+        def serialize_int_2(self, v):
+            return v + 20
+
+    adapter = TypeAdapter(Demo2)
+
+    m = adapter.validate_python(dict(int1=1, int2=2))
+    assert m.int1 == 101
+    assert m.int2 == 202
+
+    assert adapter.dump_python(m) == {'int1': 111, 'int2': 222}
+
+
+@pytest.mark.parametrize(
+    'dataclass_decorator',
+    [
+        pydantic.dataclasses.dataclass,
+        dataclasses.dataclass,
+    ],
+    ids=['pydantic', 'stdlib'],
+)
+@pytest.mark.skipif(sys.version_info < (3, 10), reason='slots are only supported for dataclasses in Python >= 3.10')
+def test_dataclass_slots(dataclass_decorator):
+    @dataclass_decorator(slots=True)
+    class Model:
+        a: str
+        b: str
+
+    dc = TypeAdapter(Model).validate_python({'a': 'foo', 'b': 'bar'})
+    assert dc.a == 'foo'
+    assert dc.b == 'bar'
+
+
+@pytest.mark.parametrize(
+    'dataclass_decorator',
+    [
+        pydantic.dataclasses.dataclass,
+        dataclasses.dataclass,
+    ],
+    ids=['pydantic', 'stdlib'],
+)
+@pytest.mark.skipif(sys.version_info < (3, 10), reason='slots are only supported for dataclasses in Python >= 3.10')
+def test_dataclass_slots_mixed(dataclass_decorator):
+    @dataclass_decorator(slots=True)
+    class Model:
+        x: int
+        y: dataclasses.InitVar[str]
+        z: ClassVar[str] = 'z-classvar'
+
+    @dataclass_decorator
+    class SubModel(Model):
+        x2: int
+        y2: dataclasses.InitVar[str]
+        z2: ClassVar[str] = 'z2-classvar'
+
+    dc = TypeAdapter(SubModel).validate_python({'x': 1, 'y': 'a', 'x2': 2, 'y2': 'b'})
+    assert dc.x == 1
+    assert dc.x2 == 2
+    assert SubModel.z == 'z-classvar'
+    assert SubModel.z2 == 'z2-classvar'

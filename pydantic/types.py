@@ -27,14 +27,22 @@ import annotated_types
 from pydantic_core import CoreSchema, PydanticCustomError, PydanticKnownError, PydanticOmit, core_schema
 from typing_extensions import Annotated, Literal, Protocol
 
-from ._internal import _fields, _internal_dataclass, _known_annotated_metadata, _validators
-from ._internal._core_metadata import build_metadata_dict
-from ._internal._internal_dataclass import slots_dataclass
+from ._internal import (
+    _core_metadata,
+    _fields,
+    _generics,
+    _internal_dataclass,
+    _known_annotated_metadata,
+    _utils,
+    _validators,
+)
 from ._migration import getattr_migration
-from .annotated import GetCoreSchemaHandler
+from .annotated import GetCoreSchemaHandler, GetJsonSchemaHandler
+from .config import ConfigDict
 from .errors import PydanticUserError
+from .json_schema import JsonSchemaValue
 
-__all__ = [
+__all__ = (
     'Strict',
     'StrictStr',
     'conbytes',
@@ -87,11 +95,7 @@ __all__ = [
     'Base64Bytes',
     'Base64Str',
     'SkipValidation',
-]
-
-from ._internal._schema_generation_shared import GetJsonSchemaHandler
-from ._internal._utils import update_not_none
-from .json_schema import JsonSchemaValue
+)
 
 
 @_dataclasses.dataclass
@@ -465,15 +469,17 @@ class SecretField(Generic[SecretType]):
         return self._secret_value
 
     @classmethod
-    def __prepare_pydantic_annotations__(cls, source: type[Any], annotations: Iterable[Any]) -> tuple[Any, list[Any]]:
+    def __prepare_pydantic_annotations__(
+        cls, source: type[Any], annotations: tuple[Any, ...], _config: ConfigDict
+    ) -> tuple[Any, Iterable[Any]]:
         metadata, remaining_annotations = _known_annotated_metadata.collect_known_metadata(annotations)
         _known_annotated_metadata.check_metadata(metadata, {'min_length', 'max_length'}, cls)
         return (
             source,
-            [
+            (
                 _SecretFieldValidator(source, **metadata),
-                remaining_annotations,
-            ],
+                *remaining_annotations,
+            ),
         )
 
     def __eq__(self, other: Any) -> bool:
@@ -501,7 +507,7 @@ def _secret_display(value: str | bytes) -> str:
     return '**********' if value else ''
 
 
-@slots_dataclass
+@_internal_dataclass.slots_dataclass
 class _SecretFieldValidator:
     field_type: type[SecretField[Any]]
     min_length: int | None = None
@@ -541,7 +547,7 @@ class _SecretFieldValidator:
         if self.max_length is not None:
             schema['max_length'] = self.max_length  # type: ignore
         json_schema = handler(schema)
-        update_not_none(
+        _utils.update_not_none(
             json_schema,
             type='string',
             writeOnly=True,
@@ -994,6 +1000,27 @@ class EncodedStr(EncodedBytes):
 Base64Bytes = Annotated[bytes, EncodedBytes(encoder=Base64Encoder)]
 Base64Str = Annotated[str, EncodedStr(encoder=Base64Encoder)]
 
+
+if TYPE_CHECKING:
+    # If we add configurable attributes to IsInstance, we'd probably need to stop hiding it from type checkers like this
+    InstanceOf = Annotated[AnyType, ...]  # `IsInstance[Sequence]` will be recognized by type checkers as `Sequence`
+
+else:
+
+    @_internal_dataclass.slots_dataclass
+    class InstanceOf:
+        @classmethod
+        def __class_getitem__(cls, item: AnyType) -> AnyType:
+            return Annotated[item, cls()]
+
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+            # use the generic _origin_ as the second argument to isinstance when appropriate
+            python_schema = core_schema.is_instance_schema(_generics.get_origin(source) or source)
+            json_schema = handler(source)
+            return core_schema.json_or_python_schema(python_schema=python_schema, json_schema=json_schema)
+
+
 __getattr__ = getattr_migration(__name__)
 
 
@@ -1046,7 +1073,7 @@ else:
         @classmethod
         def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
             original_schema = handler.generate_schema(source)
-            metadata = build_metadata_dict(js_functions=[lambda _c, h: h(original_schema)])
+            metadata = _core_metadata.build_metadata_dict(js_functions=[lambda _c, h: h(original_schema)])
             return core_schema.any_schema(metadata=metadata, serialization=original_schema)
 
 

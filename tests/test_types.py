@@ -100,7 +100,7 @@ from pydantic import (
 from pydantic.annotated import GetCoreSchemaHandler
 from pydantic.errors import PydanticSchemaGenerationError
 from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
-from pydantic.types import AllowInfNan, ImportString, SecretField, SkipValidation, Strict, TransformSchema
+from pydantic.types import AllowInfNan, ImportString, InstanceOf, SecretField, SkipValidation, Strict, TransformSchema
 
 try:
     import email_validator
@@ -1126,7 +1126,6 @@ class BoolCastable:
         return True
 
 
-@pytest.mark.xfail(sys.platform.startswith('win'), reason='https://github.com/PyO3/pyo3/issues/2913', strict=False)
 @pytest.mark.parametrize(
     'field,value,result',
     [
@@ -2063,6 +2062,24 @@ def test_invalid_iterable():
     ]
 
 
+@pytest.mark.parametrize(
+    'config,input_str',
+    (
+        ({}, 'type=iterable_type, input_value=5, input_type=int'),
+        ({'hide_input_in_errors': False}, 'type=iterable_type, input_value=5, input_type=int'),
+        ({'hide_input_in_errors': True}, 'type=iterable_type'),
+    ),
+)
+def test_iterable_error_hide_input(config, input_str):
+    class Model(BaseModel):
+        it: Iterable[int]
+
+        model_config = ConfigDict(**config)
+
+    with pytest.raises(ValidationError, match=re.escape(f'Input should be iterable [{input_str}]')):
+        Model(it=5)
+
+
 def test_infinite_iterable_validate_first():
     class Model(BaseModel):
         it: Iterable[int]
@@ -2537,10 +2554,18 @@ def test_strict_int():
         Model(v=3.14159)
 
     with pytest.raises(ValidationError, match=r'Input should be a valid integer \[type=int_type,'):
-        Model(v=2**64)
-
-    with pytest.raises(ValidationError, match=r'Input should be a valid integer \[type=int_type,'):
         Model(v=True)
+
+
+def test_int_parsing_size_error():
+    i64_max = 9_223_372_036_854_775_807
+    v = TypeAdapter(int)
+
+    with pytest.raises(
+        ValidationError,
+        match=r'Unable to parse input string as an integer, exceed maximum size \[type=int_parsing_size,',
+    ):
+        v.validate_json(json.dumps(-i64_max * 2))
 
 
 def test_strict_float():
@@ -2649,7 +2674,6 @@ def test_uuid_json():
     assert m.model_dump_json() == f'{{"v":"{m.v}","v1":"{m.v1}","v3":"{m.v3}","v4":"{m.v4}"}}'
 
 
-@pytest.mark.xfail(sys.platform.startswith('win'), reason='https://github.com/PyO3/pyo3/issues/2913', strict=False)
 def test_uuid_validation():
     class UUIDModel(BaseModel):
         a: UUID1
@@ -4594,7 +4618,9 @@ def test_custom_generic_containers():
     class GenericList(List[T]):
         @classmethod
         def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-            return core_schema.no_info_after_validator_function(GenericList, handler(List[get_args(source_type)[0]]))
+            return core_schema.no_info_after_validator_function(
+                GenericList, handler.generate_schema(List[get_args(source_type)[0]])
+            )
 
     class Model(BaseModel):
         field: GenericList[int]
@@ -4942,7 +4968,7 @@ def test_custom_default_dict() -> None:
         def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
             keys_type, values_type = get_args(source_type)
             return core_schema.no_info_after_validator_function(
-                lambda x: cls(x.default_factory, x), handler(DefaultDict[keys_type, values_type])
+                lambda x: cls(x.default_factory, x), handler.generate_schema(DefaultDict[keys_type, values_type])
             )
 
     ta = TypeAdapter(CustomDefaultDict[str, int])
@@ -5029,8 +5055,10 @@ def test_handle_3rd_party_custom_type_reusing_known_metadata() -> None:
         def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
             return core_schema.no_info_after_validator_function(PdDecimal, handler(source_type))
 
-        def __prepare_pydantic_annotations__(self, source: Any, annotations: List[Any]) -> Tuple[Any, List[Any]]:
-            return (Decimal, [self, *annotations])
+        def __prepare_pydantic_annotations__(
+            self, _source: Any, annotations: Tuple[Any, ...], _config: ConfigDict
+        ) -> Tuple[Any, Iterable[Any]]:
+            return Decimal, [self, *annotations]
 
     class Model(BaseModel):
         x: Annotated[PdDecimal, PdDecimalMarker(), annotated_types.Gt(0)]
@@ -5081,12 +5109,12 @@ def test_transform_schema_for_first_party_class():
     class LowercaseStr(str):
         @classmethod
         def __prepare_pydantic_annotations__(
-            cls, _source: Type[Any], annotations: Iterable[Any]
-        ) -> Tuple[Any, List[Any]]:
+            cls, _source: Type[Any], annotations: Tuple[Any, ...], _config: ConfigDict
+        ) -> Tuple[Any, Iterable[Any]]:
             def transform_schema(schema: CoreSchema) -> CoreSchema:
                 return core_schema.no_info_after_validator_function(lambda v: v.lower(), schema)
 
-            return str, list(annotations) + [TransformSchema(transform_schema)]
+            return str, (*annotations, TransformSchema(transform_schema))
 
     class Model(BaseModel):
         lower: LowercaseStr = Field(min_length=1)
@@ -5121,8 +5149,8 @@ def test_transform_schema_for_third_party_class():
         # ensures pydantic can produce a valid schema.
         @classmethod
         def __prepare_pydantic_annotations__(
-            cls, _source: Type[Any], annotations: Iterable[Any]
-        ) -> Tuple[Any, List[Any]]:
+            cls, _source: Type[Any], annotations: Tuple[Any, ...], _config: ConfigDict
+        ) -> Tuple[Any, Iterable[Any]]:
             def transform(schema: CoreSchema) -> CoreSchema:
                 return core_schema.no_info_after_validator_function(lambda v: DatetimeWrapper(v), schema)
 
@@ -5171,3 +5199,52 @@ def test_iterable_arbitrary_type():
 
         class Model(BaseModel):
             x: CustomIterable
+
+
+def test_typing_extension_literal_field():
+    from typing_extensions import Literal
+
+    class Model(BaseModel):
+        foo: Literal['foo']
+
+    assert Model(foo='foo').foo == 'foo'
+
+
+@pytest.mark.skipif(sys.version_info < (3, 8), reason='`typing.Literal` is available for python 3.8 and above.')
+def test_typing_literal_field():
+    from typing import Literal
+
+    class Model(BaseModel):
+        foo: Literal['foo']
+
+    assert Model(foo='foo').foo == 'foo'
+
+
+def test_is_instance_annotation():
+    class Model(BaseModel):
+        x: InstanceOf[Sequence[int]]  # Note: the generic parameter gets ignored by runtime validation
+
+    class MyList(list):
+        pass
+
+    assert Model(x='abc').x == 'abc'
+    assert type(Model(x=MyList([1, 2, 3])).x) is MyList
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(x=1)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'ctx': {'class': 'Sequence'},
+            'input': 1,
+            'loc': ('x',),
+            'msg': 'Input should be an instance of Sequence',
+            'type': 'is_instance_of',
+        }
+    ]
+
+    assert Model.model_validate_json('{"x": [1,2,3]}').x == [1, 2, 3]
+    with pytest.raises(ValidationError) as exc_info:
+        Model.model_validate_json('{"x": "abc"}')
+    assert exc_info.value.errors(include_url=False) == [
+        {'input': 'abc', 'loc': ('x',), 'msg': 'Input should be a valid array', 'type': 'list_type'}
+    ]

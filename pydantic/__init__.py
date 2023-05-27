@@ -1,4 +1,4 @@
-from pydantic_core import ValidationError
+import pydantic_core
 from pydantic_core.core_schema import (
     FieldSerializationInfo,
     FieldValidationInfo,
@@ -16,7 +16,7 @@ from .deprecated.config import BaseConfig  # type: ignore
 from .deprecated.tools import *
 from .errors import *
 from .fields import AliasChoices, AliasPath, Field, PrivateAttr, computed_field
-from .functional_serializers import field_serializer, model_serializer
+from .functional_serializers import PlainSerializer, WrapSerializer, field_serializer, model_serializer
 from .functional_validators import field_validator, model_validator
 from .main import *
 from .networks import *
@@ -26,6 +26,9 @@ from .validate_call import validate_call
 from .version import VERSION
 
 __version__ = VERSION
+
+# this encourages pycharm to import `ValidationError` from here, not pydantic_core
+ValidationError = pydantic_core.ValidationError
 
 # WARNING __all__ from .errors is not included here, it will be removed as an export here in v2
 # please use "from pydantic.errors import ..." instead
@@ -44,6 +47,8 @@ __all__ = [
     # functional serializers
     'field_serializer',
     'model_serializer',
+    'PlainSerializer',
+    'WrapSerializer',
     'FieldSerializationInfo',
     'SerializationInfo',
     'SerializerFunctionWrapHandler',
@@ -53,12 +58,14 @@ __all__ = [
     'Extra',
     # validate_call
     'validate_call',
-    # error_wrappers
+    # pydantic_core errors
     'ValidationError',
+    # errors
     'PydanticUserError',
     'PydanticSchemaGenerationError',
     'PydanticImportError',
     'PydanticUndefinedAnnotation',
+    'PydanticInvalidForJsonSchema',
     # fields
     'AliasPath',
     'AliasChoices',
