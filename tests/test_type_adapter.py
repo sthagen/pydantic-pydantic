@@ -1,5 +1,6 @@
 import json
 import sys
+from dataclasses import dataclass
 from typing import Any, Dict, ForwardRef, Generic, List, NamedTuple, Tuple, TypeVar, Union
 
 import pytest
@@ -69,7 +70,7 @@ def test_global_namespace_variables():
 
 
 def test_local_namespace_variables():
-    IntList = List[int]
+    IntList = List[int]  # noqa: F841
     OuterDict = Dict[str, 'IntList']
 
     v = TypeAdapter(OuterDict).validate_python
@@ -101,8 +102,11 @@ def test_validate_python_strict() -> None:
     class Model(TypedDict):
         x: int
 
-    lax_validator = TypeAdapter(Model, config=ConfigDict(strict=False))
-    strict_validator = TypeAdapter(Model, config=ConfigDict(strict=True))
+    class ModelStrict(Model):
+        __pydantic_config__ = ConfigDict(strict=True)  # type: ignore
+
+    lax_validator = TypeAdapter(Model)
+    strict_validator = TypeAdapter(ModelStrict)
 
     assert lax_validator.validate_python({'x': '1'}, strict=None) == Model(x=1)
     assert lax_validator.validate_python({'x': '1'}, strict=False) == Model(x=1)
@@ -125,12 +129,16 @@ def test_validate_python_strict() -> None:
     ]
 
 
+@pytest.mark.xfail(reason='Need to fix this in https://github.com/pydantic/pydantic/pull/5944')
 def test_validate_json_strict() -> None:
     class Model(TypedDict):
         x: int
 
+    class ModelStrict(Model):
+        __pydantic_config__ = ConfigDict(strict=True)  # type: ignore
+
     lax_validator = TypeAdapter(Model, config=ConfigDict(strict=False))
-    strict_validator = TypeAdapter(Model, config=ConfigDict(strict=True))
+    strict_validator = TypeAdapter(ModelStrict)
 
     assert lax_validator.validate_json(json.dumps({'x': '1'}), strict=None) == Model(x=1)
     assert lax_validator.validate_json(json.dumps({'x': '1'}), strict=False) == Model(x=1)
@@ -187,3 +195,56 @@ def test_validate_json_context() -> None:
     validator.validate_json(json.dumps({'x': 1}), context=None)
     validator.validate_json(json.dumps({'x': 1}), context={'foo': 'bar'})
     assert contexts == []
+
+
+def test_validate_python_from_attributes() -> None:
+    class Model(BaseModel):
+        x: int
+
+    class ModelFromAttributesTrue(Model):
+        model_config = ConfigDict(from_attributes=True)
+
+    class ModelFromAttributesFalse(Model):
+        model_config = ConfigDict(from_attributes=False)
+
+    @dataclass
+    class UnrelatedClass:
+        x: int = 1
+
+    input = UnrelatedClass(1)
+
+    ta = TypeAdapter(Model)
+
+    for from_attributes in (False, None):
+        with pytest.raises(ValidationError) as exc_info:
+            ta.validate_python(UnrelatedClass(), from_attributes=from_attributes)
+        assert exc_info.value.errors(include_url=False) == [
+            {'type': 'dict_type', 'loc': (), 'msg': 'Input should be a valid dictionary', 'input': input}
+        ]
+
+    res = ta.validate_python(UnrelatedClass(), from_attributes=True)
+    assert res == Model(x=1)
+
+    ta = TypeAdapter(ModelFromAttributesTrue)
+
+    with pytest.raises(ValidationError) as exc_info:
+        ta.validate_python(UnrelatedClass(), from_attributes=False)
+    assert exc_info.value.errors(include_url=False) == [
+        {'type': 'dict_type', 'loc': (), 'msg': 'Input should be a valid dictionary', 'input': input}
+    ]
+
+    for from_attributes in (True, None):
+        res = ta.validate_python(UnrelatedClass(), from_attributes=from_attributes)
+        assert res == ModelFromAttributesTrue(x=1)
+
+    ta = TypeAdapter(ModelFromAttributesFalse)
+
+    for from_attributes in (False, None):
+        with pytest.raises(ValidationError) as exc_info:
+            ta.validate_python(UnrelatedClass(), from_attributes=from_attributes)
+        assert exc_info.value.errors(include_url=False) == [
+            {'type': 'dict_type', 'loc': (), 'msg': 'Input should be a valid dictionary', 'input': input}
+        ]
+
+    res = ta.validate_python(UnrelatedClass(), from_attributes=True)
+    assert res == ModelFromAttributesFalse(x=1)

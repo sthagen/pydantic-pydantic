@@ -24,6 +24,7 @@ __all__ = (
 DEV_ERROR_DOCS_URL = f'https://errors.pydantic.dev/{VERSION}/u/'
 PydanticErrorCodes = Literal[
     'class-not-fully-defined',
+    'custom-json-schema',
     'decorator-missing-field',
     'discriminator-no-field',
     'discriminator-alias-type',
@@ -54,6 +55,7 @@ PydanticErrorCodes = Literal[
     'model-serializer-signature',
     'multiple-field-serializers',
     'invalid_annotated_type',
+    'type-adapter-config-unused',
 ]
 
 
@@ -101,10 +103,10 @@ class PydanticUndefinedAnnotation(PydanticErrorMixin, NameError):
         Convert a `NameError` to a `PydanticUndefinedAnnotation` error.
 
         Args:
-            name_error (NameError): `NameError` to be converted.
+            name_error: `NameError` to be converted.
 
         Returns:
-            PydanticUndefinedAnnotation: Converted `PydanticUndefinedAnnotation` error.
+            Converted `PydanticUndefinedAnnotation` error.
         """
         try:
             name = name_error.name  # type: ignore  # python > 3.10

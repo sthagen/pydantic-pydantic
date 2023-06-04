@@ -71,6 +71,48 @@ foo = Foo(a={'b': {'a': None}})
 
 In other cases, the error message should indicate how to rebuild the class with the appropriate type defined.
 
+## Custom JSON Schema {#custom-json-schema}
+
+The `__modify_schema__` method is no longer supported in V2. You should use the `__get_pydantic_json_schema__` method instead.
+
+The `__modify_schema__` used to receive a single argument representing the JSON schema. See the example below:
+
+```py title="Old way"
+from pydantic import BaseModel, PydanticUserError
+
+try:
+
+    class Model(BaseModel):
+        @classmethod
+        def __modify_schema__(cls, field_schema):
+            field_schema.update(examples='examples')
+
+except PydanticUserError as exc_info:
+    assert exc_info.code == 'custom-json-schema'
+```
+
+The new method `__get_pydantic_json_schema__` receives two arguments: the first is a dictionary denoted as `CoreSchema`,
+and the second a callable `handler` that receives a `CoreSchema` as parameter, and returns a JSON schema. See the example
+below:
+
+```py title="New way"
+from typing import Any, Dict
+
+from pydantic_core import CoreSchema
+
+from pydantic import BaseModel, GetJsonSchemaHandler
+
+
+class Model(BaseModel):
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> Dict[str, Any]:
+        json_schema = handler(schema)
+        json_schema.update(examples='examples')
+        return json_schema
+```
+
 ## Decorator on missing field {#decorator-missing-field}
 
 This error is raised when you define a decorator with a field that is not valid.
@@ -744,11 +786,11 @@ try:
         x: int
         y: int
 
-        @field_serializer('x', 'y', json_return_type='str')
+        @field_serializer('x', 'y')
         def serializer1(v):
             return f'{v:,}'
 
-        @field_serializer('x', json_return_type='str')
+        @field_serializer('x')
         def serializer2(v):
             return v
 
@@ -773,4 +815,48 @@ try:
 except PydanticUserError as exc_info:
     assert exc_info.code == 'invalid_annotated_type'
 ```
+
+## `config` is unused with TypeAdapter {#type-adapter-config-unused}
+
+You will get this error if you try to pass `config` to `TypeAdapter` when the type is a type that has it's own config that cannot be overridden (currently this is only `BaseModel`, `TypedDict` and `dataclass`):
+
+```py
+from typing_extensions import TypedDict
+
+from pydantic import ConfigDict, PydanticUserError, TypeAdapter
+
+
+class MyTypedDict(TypedDict):
+    x: int
+
+
+try:
+    TypeAdapter(MyTypedDict, config=ConfigDict(strict=True))
+except PydanticUserError as e:
+    print(e)
+    """
+    Cannot use `config` when the type is a BaseModel, dataclass or TypedDict. These types can have their own config and setting the config via the `config` parameter to TypeAdapter will not override it, thus the `config` you passed to TypeAdapter becomes meaningless, which is probably not what you want.
+
+    For further information visit https://errors.pydantic.dev/2/u/type-adapter-config-unused
+    """
+```
+
+Instead you'll need to subclass the type and override or set the config on it:
+
+```py
+from typing_extensions import TypedDict
+
+from pydantic import ConfigDict, TypeAdapter
+
+
+class MyTypedDict(TypedDict):
+    x: int
+
+    # or `model_config = ...` for BaseModel
+    __pydantic_config__ = ConfigDict(strict=True)
+
+
+TypeAdapter(MyTypedDict)  # ok
+```
+
 {% endraw %}

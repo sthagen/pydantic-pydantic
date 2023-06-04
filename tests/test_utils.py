@@ -7,11 +7,12 @@ from typing import Callable, Dict, Generic, List, NewType, Tuple, TypeVar, Union
 
 import pytest
 from dirty_equals import IsList
-from pydantic_core import PydanticCustomError
+from pydantic_core import PydanticCustomError, core_schema
 from typing_extensions import Annotated, Literal
 
 from pydantic import BaseModel
 from pydantic._internal import _repr
+from pydantic._internal._core_utils import _WalkCoreSchema
 from pydantic._internal._fields import Undefined
 from pydantic._internal._typing_extra import all_literal_values, get_origin, is_new_type
 from pydantic._internal._utils import (
@@ -176,6 +177,25 @@ def test_value_items():
 
     assert sub_vi.is_included(2)
     assert [v_ for i, v_ in enumerate(sub_v) if sub_vi.is_included(i)] == ['a', 'c']
+
+    vi = ValueItems([], {'__all__': {}})
+    assert vi._items == {}
+
+    with pytest.raises(TypeError, match='Unexpected type of exclude value for index "a" <class \'NoneType\'>'):
+        ValueItems(['a', 'b'], {'a': None})
+
+    m = (
+        'Excluding fields from a sequence of sub-models or dicts must be performed index-wise: '
+        'expected integer keys or keyword "__all__"'
+    )
+    with pytest.raises(TypeError, match=m):
+        ValueItems(['a', 'b'], {'a': {}})
+
+    vi = ValueItems([1, 2, 3, 4], {'__all__': True})
+    assert repr(vi) == 'ValueItems({0: Ellipsis, 1: Ellipsis, 2: Ellipsis, 3: Ellipsis})'
+
+    vi = ValueItems([1, 2], {'__all__': {1, 2}})
+    assert repr(vi) == 'ValueItems({0: {1: Ellipsis, 2: Ellipsis}, 1: {1: Ellipsis, 2: Ellipsis}})'
 
 
 @pytest.mark.parametrize(
@@ -520,3 +540,138 @@ def test_snake2camel(value: str, result: str) -> None:
 )
 def test_camel2snake(value: str, result: str) -> None:
     assert to_snake(value) == result
+
+
+@pytest.mark.parametrize(
+    'params,expected_extra_schema',
+    (
+        pytest.param({}, {}, id='Positional tuple without extra_schema'),
+        pytest.param(
+            {'extra_schema': core_schema.float_schema()},
+            {'extra_schema': {'type': 'str'}},
+            id='Positional tuple with extra_schema',
+        ),
+    ),
+)
+def test_handle_tuple_positional_schema(params, expected_extra_schema):
+    schema = core_schema.tuple_positional_schema([core_schema.str_schema()], **params)
+
+    def walk(s, recurse):
+        # change extra_schema['type'] to 'str'
+        if s['type'] == 'float':
+            s['type'] = 'str'
+        return s
+
+    schema = _WalkCoreSchema().handle_tuple_positional_schema(schema, walk)
+    assert schema == {
+        **expected_extra_schema,
+        'items_schema': [{'type': 'str'}],
+        'type': 'tuple-positional',
+    }
+
+
+@pytest.mark.parametrize(
+    'params,expected_extra_schema',
+    (
+        pytest.param({}, {}, id='Model fields without extra_validator'),
+        pytest.param(
+            {'extra_validator': core_schema.float_schema()},
+            {'extra_validator': {'type': 'str'}},
+            id='Model fields with extra_validator',
+        ),
+    ),
+)
+def test_handle_model_fields_schema(params, expected_extra_schema):
+    schema = core_schema.model_fields_schema(
+        {
+            'foo': core_schema.model_field(core_schema.int_schema()),
+        },
+        **params,
+    )
+
+    def walk(s, recurse):
+        # change extra_schema['type'] to 'str'
+        if s['type'] == 'float':
+            s['type'] = 'str'
+        return s
+
+    schema = _WalkCoreSchema().handle_model_fields_schema(schema, walk)
+    assert schema == {
+        **expected_extra_schema,
+        'type': 'model-fields',
+        'fields': {'foo': {'type': 'model-field', 'schema': {'type': 'int'}}},
+    }
+
+
+@pytest.mark.parametrize(
+    'params,expected_extra_schema',
+    (
+        pytest.param({}, {}, id='Typeddict without extra_validator'),
+        pytest.param(
+            {'extra_validator': core_schema.float_schema()},
+            {'extra_validator': {'type': 'str'}},
+            id='Typeddict with extra_validator',
+        ),
+    ),
+)
+def test_handle_typed_dict_schema(params, expected_extra_schema):
+    schema = core_schema.typed_dict_schema(
+        {
+            'foo': core_schema.model_field(core_schema.int_schema()),
+        },
+        **params,
+    )
+
+    def walk(s, recurse):
+        # change extra_validator['type'] to 'str'
+        if s['type'] == 'float':
+            s['type'] = 'str'
+        return s
+
+    schema = _WalkCoreSchema().handle_typed_dict_schema(schema, walk)
+    assert schema == {
+        **expected_extra_schema,
+        'type': 'typed-dict',
+        'fields': {'foo': {'type': 'model-field', 'schema': {'type': 'int'}}},
+    }
+
+
+def test_handle_function_schema():
+    schema = core_schema.field_before_validator_function(function=lambda v, _info: v, schema=core_schema.float_schema())
+
+    def walk(s, recurse):
+        # change type to str
+        if s['type'] == 'float':
+            s['type'] = 'str'
+        return s
+
+    schema = _WalkCoreSchema().handle_function_schema(schema, walk)
+    assert schema['type'] == 'function-before'
+    assert schema['schema'] == {'type': 'str'}
+
+    def walk1(s, recurse):
+        # this is here to make sure this function is not called
+        assert False
+
+    schema = _WalkCoreSchema().handle_function_schema(core_schema.int_schema(), walk1)
+    assert schema['type'] == 'int'
+
+
+def test_handle_call_schema():
+    param_a = core_schema.arguments_parameter(name='a', schema=core_schema.str_schema(), mode='positional_only')
+    args_schema = core_schema.arguments_schema([param_a])
+
+    schema = core_schema.call_schema(
+        arguments=args_schema,
+        function=lambda a: int(a),
+        return_schema=core_schema.str_schema(),
+    )
+
+    def walk(s, recurse):
+        # change return schema
+        if 'return_schema' in schema:
+            schema['return_schema']['type'] = 'int'
+        return s
+
+    schema = _WalkCoreSchema().handle_call_schema(schema, walk)
+    assert schema['return_schema'] == {'type': 'int'}

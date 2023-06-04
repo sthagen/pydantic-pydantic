@@ -60,6 +60,8 @@ from pydantic import (
     FiniteFloat,
     FutureDate,
     FutureDatetime,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
     Json,
     NaiveDatetime,
     NameEmail,
@@ -97,9 +99,9 @@ from pydantic import (
     field_validator,
     validate_call,
 )
-from pydantic.annotated import GetCoreSchemaHandler
 from pydantic.errors import PydanticSchemaGenerationError
-from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
+from pydantic.functional_validators import AfterValidator
+from pydantic.json_schema import JsonSchemaValue
 from pydantic.types import AllowInfNan, ImportString, InstanceOf, SecretField, SkipValidation, Strict, TransformSchema
 
 try:
@@ -844,13 +846,46 @@ def test_string_import_callable(annotation):
     ]
 
 
-def test_string_import_any():
+@pytest.mark.parametrize(
+    ('value', 'expected', 'mode'),
+    [
+        ('math:cos', 'math.cos', 'json'),
+        ('math:cos', math.cos, 'python'),
+        pytest.param(
+            'os.path', 'posixpath', 'json', marks=pytest.mark.skipif(sys.platform == 'win32', reason='different output')
+        ),
+        pytest.param(
+            'os.path', 'ntpath', 'json', marks=pytest.mark.skipif(sys.platform != 'win32', reason='different output')
+        ),
+        ('os.path', os.path, 'python'),
+        ([1, 2, 3], [1, 2, 3], 'json'),
+        ([1, 2, 3], [1, 2, 3], 'python'),
+        ('math', 'math', 'json'),
+        ('math', math, 'python'),
+        ('builtins.list', 'builtins.list', 'json'),
+        ('builtins.list', list, 'python'),
+        (list, 'builtins.list', 'json'),
+        (list, list, 'python'),
+        (f'{__name__}.pytest', 'pytest', 'json'),
+        (f'{__name__}.pytest', pytest, 'python'),
+    ],
+)
+def test_string_import_any(value: Any, expected: Any, mode: Literal['json', 'python']):
     class PyObjectModel(BaseModel):
         thing: ImportString
 
-    assert PyObjectModel(thing='math:cos').model_dump() == {'thing': math.cos}
-    assert PyObjectModel(thing='os.path').model_dump() == {'thing': os.path}
-    assert PyObjectModel(thing=[1, 2, 3]).model_dump() == {'thing': [1, 2, 3]}
+    assert PyObjectModel(thing=value).model_dump(mode=mode) == {'thing': expected}
+
+
+@pytest.mark.parametrize('value', ['oss', 'os.os', f'{__name__}.x'])
+def test_string_import_any_expected_failure(value: Any):
+    """Ensure importString correctly fails to instantiate when it's supposed to"""
+
+    class PyObjectModel(BaseModel):
+        thing: ImportString
+
+    with pytest.raises(ValidationError, match='type=import_error'):
+        PyObjectModel(thing=value)
 
 
 @pytest.mark.parametrize(
@@ -1407,9 +1442,9 @@ def test_datetime_errors(DatetimeModel):
         {
             'type': 'time_delta_parsing',
             'loc': ('duration',),
-            'msg': 'Input should be a valid timedelta, unexpected extra characters at the end of the input',
+            'msg': 'Input should be a valid timedelta, invalid timezone sign',
             'input': '15:30.0001broken',
-            'ctx': {'error': 'unexpected extra characters at the end of the input'},
+            'ctx': {'error': 'invalid timezone sign'},
         },
     ]
 
@@ -1612,15 +1647,7 @@ def test_enum_from_json(enum_base, strict):
 @pytest.mark.parametrize(
     'kwargs,type_',
     [
-        ({'max_length': 5}, int),
-        ({'min_length': 2}, float),
         ({'pattern': '^foo$'}, int),
-        ({'gt': 2}, str),
-        ({'lt': 5}, bytes),
-        ({'ge': 2}, str),
-        ({'le': 5}, bool),
-        ({'gt': 0}, Callable),
-        ({'gt': 0}, Callable[[int], int]),
         ({'gt': 0}, conlist(int, min_length=4)),
         ({'gt': 0}, conset(int, min_length=4)),
         ({'gt': 0}, confrozenset(int, min_length=4)),
@@ -1654,6 +1681,7 @@ def test_string_success():
         str_min_length: constr(min_length=5) = ...
         str_email: EmailStr = ...
         name_email: NameEmail = ...
+        str_gt: Annotated[str, annotated_types.Gt('a')]
 
     m = MoreStringsModel(
         str_strip_enabled='   xxx123   ',
@@ -1662,6 +1690,7 @@ def test_string_success():
         str_min_length='12345',
         str_email='foobar@example.com  ',
         name_email='foo bar  <foobaR@example.com>',
+        str_gt='b',
     )
     assert m.str_strip_enabled == 'xxx123'
     assert m.str_strip_disabled == '   xxx123   '
@@ -1671,6 +1700,7 @@ def test_string_success():
     assert str(m.name_email) == 'foo bar <foobaR@example.com>'
     assert m.name_email.name == 'foo bar'
     assert m.name_email.email == 'foobaR@example.com'
+    assert m.str_gt == 'b'
 
 
 @pytest.mark.skipif(not email_validator, reason='email_validator not installed')
@@ -2563,7 +2593,7 @@ def test_int_parsing_size_error():
 
     with pytest.raises(
         ValidationError,
-        match=r'Unable to parse input string as an integer, exceed maximum size \[type=int_parsing_size,',
+        match=r'Unable to parse input string as an integer, exceeded maximum size \[type=int_parsing_size,',
     ):
         v.validate_json(json.dumps(-i64_max * 2))
 
@@ -2933,6 +2963,20 @@ ANY_THING = object()
         (dict(max_digits=4, decimal_places=1), Decimal('999'), Decimal('999')),
         (dict(max_digits=20, decimal_places=2), Decimal('742403889818000000'), Decimal('742403889818000000')),
         (dict(max_digits=20, decimal_places=2), Decimal('7.42403889818E+17'), Decimal('7.42403889818E+17')),
+        (dict(max_digits=6, decimal_places=2), Decimal('000000000001111.700000'), Decimal('000000000001111.700000')),
+        (
+            dict(max_digits=6, decimal_places=2),
+            Decimal('0000000000011111.700000'),
+            [
+                {
+                    'type': 'decimal_whole_digits',
+                    'loc': ('foo',),
+                    'msg': 'ensure that there are no more than 4 digits before the decimal point',
+                    'input': Decimal('11111.700000'),
+                    'ctx': {'whole_digits': 4},
+                }
+            ],
+        ),
         (
             dict(max_digits=20, decimal_places=2),
             Decimal('7424742403889818000000'),
@@ -2964,15 +3008,15 @@ ANY_THING = object()
         ),
         (dict(max_digits=5, decimal_places=5), Decimal('70E-5'), Decimal('70E-5')),
         (
-            dict(max_digits=5, decimal_places=5),
+            dict(max_digits=4, decimal_places=4),
             Decimal('70E-6'),
             [
                 {
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 5 digits in total',
+                    'msg': 'ensure that there are no more than 4 digits in total',
                     'type': 'decimal_max_digits',
-                    'input': Decimal('0.000070'),
-                    'ctx': {'max_digits': 5},
+                    'input': Decimal('0.00007'),
+                    'ctx': {'max_digits': 4},
                 }
             ],
         ),
@@ -3240,6 +3284,50 @@ def test_directory_path_validation_fails(value):
             'input': value,
         }
     ]
+
+
+@pytest.mark.parametrize('value', ('tests/test_types.py', Path('tests/test_types.py')))
+def test_new_path_validation_path_already_exists(value):
+    class Model(BaseModel):
+        foo: NewPath
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(foo=value)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'type': 'path_exists',
+            'loc': ('foo',),
+            'msg': 'Path already exists',
+            'input': value,
+        }
+    ]
+
+
+@pytest.mark.parametrize('value', ('/nonexistentdir/foo.py', Path('/nonexistentdir/foo.py')))
+def test_new_path_validation_parent_does_not_exist(value):
+    class Model(BaseModel):
+        foo: NewPath
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(foo=value)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'type': 'parent_does_not_exist',
+            'loc': ('foo',),
+            'msg': 'Parent directory does not exist',
+            'input': value,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    'value,result', (('tests/foo.py', Path('tests/foo.py')), (Path('tests/foo.py'), Path('tests/foo.py')))
+)
+def test_new_path_validation_success(value, result):
+    class Model(BaseModel):
+        foo: NewPath
+
+    assert Model(foo=value).foo == result
 
 
 def test_number_gt():
@@ -3660,12 +3748,22 @@ def test_pattern(pattern_type, pattern_value, matching_value, non_matching_value
     f2 = Foobar(pattern=p)
     assert f2.pattern is p
 
-    # assert Foobar.model_json_schema() == {
-    #     'type': 'object',
-    #     'title': 'Foobar',
-    #     'properties': {'pattern': {'type': 'string', 'format': 'regex', 'title': 'Pattern'}},
-    #     'required': ['pattern'],
-    # }
+    assert Foobar.model_json_schema() == {
+        'type': 'object',
+        'title': 'Foobar',
+        'properties': {'pattern': {'type': 'string', 'format': 'regex', 'title': 'Pattern'}},
+        'required': ['pattern'],
+    }
+
+
+def test_pattern_with_invalid_param():
+    with pytest.raises(
+        PydanticSchemaGenerationError,
+        match=re.escape('Unable to generate pydantic-core schema for typing.Pattern[int].'),
+    ):
+
+        class Foo(BaseModel):
+            pattern: Pattern[int]
 
 
 @pytest.mark.parametrize(
@@ -3754,6 +3852,8 @@ def test_secretstr():
     assert str(f.empty_password) == ''
     assert repr(f.password) == "SecretStr('**********')"
     assert repr(f.empty_password) == "SecretStr('')"
+    assert len(f.password) == 4
+    assert len(f.empty_password) == 0
 
     # Assert retrieval of secret value is correct
     assert f.password.get_secret_value() == '1234'
@@ -3801,6 +3901,7 @@ def test_secretstr_idempotent():
         conbytes,
         SecretBytes,
         constr,
+        SecretField,
         StrictStr,
         SecretStr,
         ImportString,
@@ -3852,6 +3953,14 @@ def test_secretstr_error():
             'input': [6, 23, 'abc'],
         }
     ]
+
+
+def test_secret_str_hashable():
+    assert type(hash(SecretStr('abs'))) is int
+
+
+def test_secret_bytes_hashable():
+    assert type(hash(SecretBytes(b'abs'))) is int
 
 
 def test_secret_str_min_max_length():
@@ -5220,7 +5329,7 @@ def test_typing_literal_field():
     assert Model(foo='foo').foo == 'foo'
 
 
-def test_is_instance_annotation():
+def test_instance_of_annotation():
     class Model(BaseModel):
         x: InstanceOf[Sequence[int]]  # Note: the generic parameter gets ignored by runtime validation
 
@@ -5248,3 +5357,208 @@ def test_is_instance_annotation():
     assert exc_info.value.errors(include_url=False) == [
         {'input': 'abc', 'loc': ('x',), 'msg': 'Input should be a valid array', 'type': 'list_type'}
     ]
+
+
+def test_instanceof_invalid_core_schema():
+    class MyClass:
+        pass
+
+    class MyModel(BaseModel):
+        a: InstanceOf[MyClass]
+
+    MyModel(a=MyClass())
+    with pytest.raises(ValidationError) as exc_info:
+        MyModel(a=1)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'ctx': {'class': 'test_instanceof_invalid_core_schema.<locals>.MyClass'},
+            'input': 1,
+            'loc': ('a',),
+            'msg': 'Input should be an instance of ' 'test_instanceof_invalid_core_schema.<locals>.MyClass',
+            'type': 'is_instance_of',
+        }
+    ]
+    with pytest.raises(
+        PydanticInvalidForJsonSchema, match='Cannot generate a JsonSchema for core_schema.IsInstanceSchema'
+    ):
+        MyModel.model_json_schema()
+
+
+def test_constraints_arbitrary_type() -> None:
+    class CustomType:
+        def __init__(self, v: Any) -> None:
+            self.v = v
+
+        def __eq__(self, o: object) -> bool:
+            return self.v == o
+
+        def __le__(self, o: object) -> bool:
+            return self.v <= o
+
+        def __lt__(self, o: object) -> bool:
+            return self.v < o
+
+        def __ge__(self, o: object) -> bool:
+            return self.v >= o
+
+        def __gt__(self, o: object) -> bool:
+            return self.v > o
+
+        def __mod__(self, o: Any) -> Any:
+            return self.v % o
+
+        def __len__(self) -> int:
+            return len(self.v)
+
+        def __repr__(self) -> str:
+            return f'CustomType({self.v})'
+
+    class Model(BaseModel):
+        gt: Annotated[CustomType, annotated_types.Gt(CustomType(0))]
+        ge: Annotated[CustomType, annotated_types.Ge(CustomType(0))]
+        lt: Annotated[CustomType, annotated_types.Lt(CustomType(0))]
+        le: Annotated[CustomType, annotated_types.Le(CustomType(0))]
+        multiple_of: Annotated[CustomType, annotated_types.MultipleOf(2)]
+        min_length: Annotated[CustomType, annotated_types.MinLen(1)]
+        max_length: Annotated[CustomType, annotated_types.MaxLen(1)]
+        predicate: Annotated[CustomType, annotated_types.Predicate(lambda x: x > 0)]
+
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    Model(
+        gt=CustomType(1),
+        ge=CustomType(0),
+        lt=CustomType(-1),
+        le=CustomType(0),
+        min_length=CustomType([1, 2]),
+        max_length=CustomType([]),
+        multiple_of=CustomType(4),
+        predicate=CustomType(1),
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(
+            gt=CustomType(-1),
+            ge=CustomType(-1),
+            lt=CustomType(1),
+            le=CustomType(1),
+            min_length=CustomType([]),
+            max_length=CustomType([1, 2, 3]),
+            multiple_of=CustomType(3),
+            predicate=CustomType(-1),
+        )
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'type': 'greater_than',
+            'loc': ('gt',),
+            'msg': 'Input should be greater than CustomType(0)',
+            'input': CustomType(-1),
+            'ctx': {'gt': 'CustomType(0)'},
+        },
+        {
+            'type': 'greater_than_equal',
+            'loc': ('ge',),
+            'msg': 'Input should be greater than or equal to CustomType(0)',
+            'input': CustomType(-1),
+            'ctx': {'ge': 'CustomType(0)'},
+        },
+        {
+            'type': 'less_than',
+            'loc': ('lt',),
+            'msg': 'Input should be less than CustomType(0)',
+            'input': CustomType(1),
+            'ctx': {'lt': 'CustomType(0)'},
+        },
+        {
+            'type': 'less_than_equal',
+            'loc': ('le',),
+            'msg': 'Input should be less than or equal to CustomType(0)',
+            'input': CustomType(1),
+            'ctx': {'le': 'CustomType(0)'},
+        },
+        {
+            'type': 'multiple_of',
+            'loc': ('multiple_of',),
+            'msg': 'Input should be a multiple of 2',
+            'input': CustomType(3),
+            'ctx': {'multiple_of': 2},
+        },
+        {
+            'type': 'too_short',
+            'loc': ('min_length',),
+            'msg': 'Value should have at least 1 item after validation, not 0',
+            'input': CustomType([]),
+            'ctx': {'field_type': 'Value', 'min_length': 1, 'actual_length': 0},
+        },
+        {
+            'type': 'too_long',
+            'loc': ('max_length',),
+            'msg': 'Value should have at most 1 item after validation, not 3',
+            'input': CustomType([1, 2, 3]),
+            'ctx': {'field_type': 'Value', 'max_length': 1, 'actual_length': 3},
+        },
+        {
+            'type': 'predicate_failed',
+            'loc': ('predicate',),
+            'msg': 'Predicate test_constraints_arbitrary_type.<locals>.Model.<lambda> failed',
+            'input': CustomType(-1),
+            'ctx': {},
+        },
+    ]
+
+
+def test_annotated_default_value() -> None:
+    t = TypeAdapter(Annotated[List[int], Field(default=['1', '2'])])
+
+    r = t.get_default_value()
+    assert r is not None
+    assert r.value == ['1', '2']
+
+    # insert_assert(t.json_schema())
+    assert t.json_schema() == {'type': 'array', 'items': {'type': 'integer'}, 'default': ['1', '2']}
+
+
+def test_annotated_default_value_validate_default() -> None:
+    t = TypeAdapter(Annotated[List[int], Field(default=['1', '2'])], config=ConfigDict(validate_default=True))
+
+    r = t.get_default_value()
+    assert r is not None
+    assert r.value == [1, 2]
+
+    # insert_assert(t.json_schema())
+    assert t.json_schema() == {'type': 'array', 'items': {'type': 'integer'}, 'default': ['1', '2']}
+
+
+def test_annotated_default_value_functional_validator() -> None:
+    T = TypeVar('T')
+    WithAfterValidator = Annotated[T, AfterValidator(lambda x: [v * 2 for v in x])]
+    WithDefaultValue = Annotated[T, Field(default=['1', '2'])]
+
+    # the order of the args should not matter, we always put the default value on the outside
+    for tp in (WithDefaultValue[WithAfterValidator[List[int]]], WithAfterValidator[WithDefaultValue[List[int]]]):
+        t = TypeAdapter(tp, config=ConfigDict(validate_default=True))
+
+        r = t.get_default_value()
+        assert r is not None
+        assert r.value == [2, 4]
+
+        # insert_assert(t.json_schema())
+        assert t.json_schema() == {'type': 'array', 'items': {'type': 'integer'}, 'default': ['1', '2']}
+
+
+@pytest.mark.parametrize(
+    'pydantic_type,expected',
+    (
+        (Json, 'Json'),
+        (PastDate, 'PastDate'),
+        (FutureDate, 'FutureDate'),
+        (AwareDatetime, 'AwareDatetime'),
+        (NaiveDatetime, 'NaiveDatetime'),
+        (PastDatetime, 'PastDatetime'),
+        (FutureDatetime, 'FutureDatetime'),
+        (ImportString, 'ImportString'),
+    ),
+)
+def test_types_repr(pydantic_type, expected):
+    assert repr(pydantic_type()) == expected

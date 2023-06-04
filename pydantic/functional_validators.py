@@ -9,8 +9,8 @@ from pydantic_core import core_schema
 from pydantic_core import core_schema as _core_schema
 from typing_extensions import Literal, TypeAlias
 
+from . import GetCoreSchemaHandler as _GetCoreSchemaHandler
 from ._internal import _decorators, _internal_dataclass
-from .annotated import GetCoreSchemaHandler
 from .errors import PydanticUserError
 
 if sys.version_info < (3, 11):
@@ -25,7 +25,7 @@ _inspect_validator = _decorators.inspect_validator
 class AfterValidator:
     func: core_schema.NoInfoValidatorFunction | core_schema.GeneralValidatorFunction
 
-    def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+    def __get_pydantic_core_schema__(self, source_type: Any, handler: _GetCoreSchemaHandler) -> core_schema.CoreSchema:
         schema = handler(source_type)
         info_arg = _inspect_validator(self.func, 'after')
         if info_arg:
@@ -38,7 +38,7 @@ class AfterValidator:
 class BeforeValidator:
     func: core_schema.NoInfoValidatorFunction | core_schema.GeneralValidatorFunction
 
-    def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+    def __get_pydantic_core_schema__(self, source_type: Any, handler: _GetCoreSchemaHandler) -> core_schema.CoreSchema:
         schema = handler(source_type)
         info_arg = _inspect_validator(self.func, 'before')
         if info_arg:
@@ -51,7 +51,7 @@ class BeforeValidator:
 class PlainValidator:
     func: core_schema.NoInfoValidatorFunction | core_schema.GeneralValidatorFunction
 
-    def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+    def __get_pydantic_core_schema__(self, source_type: Any, handler: _GetCoreSchemaHandler) -> core_schema.CoreSchema:
         info_arg = _inspect_validator(self.func, 'plain')
         if info_arg:
             return core_schema.general_plain_validator_function(self.func)  # type: ignore
@@ -63,7 +63,7 @@ class PlainValidator:
 class WrapValidator:
     func: core_schema.GeneralWrapValidatorFunction | core_schema.FieldWrapValidatorFunction
 
-    def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+    def __get_pydantic_core_schema__(self, source_type: Any, handler: _GetCoreSchemaHandler) -> core_schema.CoreSchema:
         schema = handler(source_type)
         info_arg = _inspect_validator(self.func, 'wrap')
         if info_arg:
@@ -148,16 +148,16 @@ def field_validator(
     Decorate methods on the class indicating that they should be used to validate fields.
 
     Args:
-        __field (str): The first field the field_validator should be called on; this is separate
+        __field: The first field the field_validator should be called on; this is separate
             from `fields` to ensure an error is raised if you don't pass at least one.
-        *fields (tuple): Additional field(s) the field_validator should be called on.
-        mode (FieldValidatorModes): Specifies whether to validate the fields before or after validation.
+        *fields: Additional field(s) the field_validator should be called on.
+        mode: Specifies whether to validate the fields before or after validation.
              Defaults to 'after'.
-        check_fields (bool | None): If set to True, checks that the fields actually exist on the model.
+        check_fields: If set to True, checks that the fields actually exist on the model.
             Defaults to None.
 
     Returns:
-        Callable: A decorator that can be used to decorate a function to be used as a field_validator.
+        A decorator that can be used to decorate a function to be used as a field_validator.
     """
     if isinstance(__field, FunctionType):
         raise PydanticUserError(
@@ -195,7 +195,7 @@ _ModelTypeCo = TypeVar('_ModelTypeCo', covariant=True)
 
 
 class ModelWrapValidatorHandler(_core_schema.ValidatorFunctionWrapHandler, Protocol[_ModelTypeCo]):
-    def __call__(self, input_value: Any, outer_location: str | int | None = None) -> _ModelTypeCo:
+    def __call__(self, input_value: Any, outer_location: str | int | None = None) -> _ModelTypeCo:  # pragma: no cover
         ...
 
 
@@ -305,11 +305,11 @@ def model_validator(
     Decorate model methods for validation purposes.
 
     Args:
-        mode (Literal['wrap', 'before', 'after']): A required string literal that specifies the validation mode.
+        mode: A required string literal that specifies the validation mode.
             It can be one of the following: 'wrap', 'before', or 'after'.
 
     Returns:
-        Any: A decorator that can be used to decorate a function to be used as a model validator.
+        A decorator that can be used to decorate a function to be used as a model validator.
     """
 
     def dec(f: Any) -> _decorators.PydanticDescriptorProxy[Any]:

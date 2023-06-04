@@ -387,8 +387,7 @@ from typing import Any, Dict, List, Type
 
 from pydantic_core import core_schema
 
-from pydantic import BaseModel
-from pydantic.annotated import GetCoreSchemaHandler
+from pydantic import BaseModel, GetCoreSchemaHandler
 
 
 @dataclass
@@ -408,7 +407,7 @@ class CompressedString:
             cls._validate,
             core_schema.str_schema(),
             serialization=core_schema.plain_serializer_function_ser_schema(
-                cls._serialize, info_arg=False, json_return_type='str'
+                cls._serialize, info_arg=False, return_schema=core_schema.str_schema()
             ),
         )
 
@@ -458,8 +457,7 @@ from typing import Any, Sequence, Type
 from pydantic_core import core_schema
 from typing_extensions import Annotated
 
-from pydantic import BaseModel, ValidationError
-from pydantic.annotated import GetCoreSchemaHandler
+from pydantic import BaseModel, GetCoreSchemaHandler, ValidationError
 
 
 @dataclass
@@ -521,8 +519,7 @@ from typing import Any, Type
 from pydantic_core import ValidationError, core_schema
 from typing_extensions import Annotated
 
-from pydantic import BaseModel
-from pydantic.annotated import GetCoreSchemaHandler
+from pydantic import BaseModel, GetCoreSchemaHandler
 
 
 class SmallString:
@@ -560,8 +557,7 @@ from typing import Any, Type
 from pydantic_core import ValidationError, core_schema
 from typing_extensions import Annotated
 
-from pydantic import BaseModel
-from pydantic.annotated import GetCoreSchemaHandler
+from pydantic import BaseModel, GetCoreSchemaHandler
 
 
 class AllowAnySubclass:
@@ -765,8 +761,8 @@ import json
 
 from pydantic_core import CoreSchema
 
-from pydantic import BaseModel
-from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
+from pydantic import BaseModel, GetJsonSchemaHandler
+from pydantic.json_schema import JsonSchemaValue
 
 
 class Person(BaseModel):

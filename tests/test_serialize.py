@@ -2,25 +2,34 @@
 New tests for v2 of serialization logic.
 """
 import json
+import re
 from functools import partial, partialmethod
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Pattern, Tuple, Type
 
 import pytest
-from pydantic_core import PydanticSerializationError, core_schema, to_jsonable_python
-from typing_extensions import Annotated
+from pydantic_core import PydanticSerializationError, SchemaSerializer, core_schema, to_jsonable_python
+from typing_extensions import Annotated, TypedDict
 
 from pydantic import (
     BaseModel,
     Field,
     FieldSerializationInfo,
+    GetCoreSchemaHandler,
+    SecretField,
+    SecretStr,
     SerializationInfo,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     errors,
     field_serializer,
     model_serializer,
 )
+from pydantic._internal import _known_annotated_metadata
+from pydantic._internal._config import ConfigWrapper
+from pydantic._internal._generate_schema import GenerateSchema
 from pydantic.config import ConfigDict
 from pydantic.functional_serializers import PlainSerializer, WrapSerializer
+from pydantic.types import _SecretFieldValidator
 
 
 def test_serialize_extra_allow() -> None:
@@ -73,7 +82,7 @@ def test_serialize_extra_allow_subclass_2() -> None:
 
 
 def test_serializer_annotated_plain_always():
-    FancyInt = Annotated[int, PlainSerializer(lambda x: f'{x:,}', json_return_type='str')]
+    FancyInt = Annotated[int, PlainSerializer(lambda x: f'{x:,}', return_type=str)]
 
     class MyModel(BaseModel):
         x: FancyInt
@@ -84,7 +93,7 @@ def test_serializer_annotated_plain_always():
 
 
 def test_serializer_annotated_plain_json():
-    FancyInt = Annotated[int, PlainSerializer(lambda x: f'{x:,}', json_return_type='str', when_used='json')]
+    FancyInt = Annotated[int, PlainSerializer(lambda x: f'{x:,}', return_type=str, when_used='json')]
 
     class MyModel(BaseModel):
         x: FancyInt
@@ -95,10 +104,10 @@ def test_serializer_annotated_plain_json():
 
 
 def test_serializer_annotated_wrap_always():
-    def ser_wrap(v: Any, nxt: SerializerFunctionWrapHandler) -> Any:
+    def ser_wrap(v: Any, nxt: SerializerFunctionWrapHandler) -> str:
         return f'{nxt(v + 1):,}'
 
-    FancyInt = Annotated[int, WrapSerializer(ser_wrap, json_return_type='str')]
+    FancyInt = Annotated[int, WrapSerializer(ser_wrap, return_type=str)]
 
     class MyModel(BaseModel):
         x: FancyInt
@@ -109,10 +118,10 @@ def test_serializer_annotated_wrap_always():
 
 
 def test_serializer_annotated_wrap_json():
-    def ser_wrap(v: Any, nxt: SerializerFunctionWrapHandler) -> Any:
+    def ser_wrap(v: Any, nxt: SerializerFunctionWrapHandler) -> str:
         return f'{nxt(v + 1):,}'
 
-    FancyInt = Annotated[int, WrapSerializer(ser_wrap, json_return_type='str', when_used='json')]
+    FancyInt = Annotated[int, WrapSerializer(ser_wrap, when_used='json')]
 
     class MyModel(BaseModel):
         x: FancyInt
@@ -142,8 +151,8 @@ def test_serialize_decorator_always():
     class MyModel(BaseModel):
         x: Optional[int]
 
-        @field_serializer('x', json_return_type='str')
-        def customise_x_serialisation(v, _info):
+        @field_serializer('x')
+        def customise_x_serialisation(v, _info) -> str:
             return f'{v:,}'
 
     assert MyModel(x=1234).model_dump() == {'x': '1,234'}
@@ -165,8 +174,8 @@ def test_serialize_decorator_json():
     class MyModel(BaseModel):
         x: int
 
-        @field_serializer('x', json_return_type='str', when_used='json')
-        def customise_x_serialisation(v):
+        @field_serializer('x', when_used='json')
+        def customise_x_serialisation(v) -> str:
             return f'{v:,}'
 
     assert MyModel(x=1234).model_dump() == {'x': 1234}
@@ -264,7 +273,7 @@ def test_invalid_signature_no_params() -> None:
 
             # caught by type checkers
             @field_serializer('x')
-            def no_args() -> Any:  # pragma: no cover
+            def no_args() -> Any:
                 ...
 
 
@@ -276,7 +285,7 @@ def test_invalid_signature_single_params() -> None:
 
             # not caught by type checkers
             @field_serializer('x')
-            def no_args(self) -> Any:  # pragma: no cover
+            def no_args(self) -> Any:
                 ...
 
 
@@ -288,7 +297,7 @@ def test_invalid_signature_too_many_params_1() -> None:
 
             # caught by type checkers
             @field_serializer('x')
-            def no_args(self, value: Any, nxt: Any, info: Any, extra_param: Any) -> Any:  # pragma: no cover
+            def no_args(self, value: Any, nxt: Any, info: Any, extra_param: Any) -> Any:
                 ...
 
 
@@ -301,7 +310,7 @@ def test_invalid_signature_too_many_params_2() -> None:
             # caught by type checkers
             @field_serializer('x')
             @staticmethod
-            def no_args(not_self: Any, value: Any, nxt: Any, info: Any) -> Any:  # pragma: no cover
+            def no_args(not_self: Any, value: Any, nxt: Any, info: Any) -> Any:
                 ...
 
 
@@ -313,7 +322,7 @@ def test_invalid_signature_bad_plain_signature() -> None:
 
             # caught by type checkers
             @field_serializer('x', mode='plain')
-            def no_args(self, value: Any, nxt: Any, info: Any) -> Any:  # pragma: no cover
+            def no_args(self, value: Any, nxt: Any, info: Any) -> Any:
                 ...
 
 
@@ -343,8 +352,8 @@ def test_serialize_decorator_self_info():
     class MyModel(BaseModel):
         x: Optional[int]
 
-        @field_serializer('x', json_return_type='str')
-        def customise_x_serialisation(self, v, info):
+        @field_serializer('x')
+        def customise_x_serialisation(self, v, info) -> str:
             return f'{info.mode}:{v:,}'
 
     assert MyModel(x=1234).model_dump() == {'x': 'python:1,234'}
@@ -355,8 +364,8 @@ def test_serialize_decorator_self_no_info():
     class MyModel(BaseModel):
         x: Optional[int]
 
-        @field_serializer('x', json_return_type='str')
-        def customise_x_serialisation(self, v):
+        @field_serializer('x')
+        def customise_x_serialisation(self, v) -> str:
             return f'{v:,}'
 
     assert MyModel(x=1234).model_dump() == {'x': '1,234'}
@@ -459,26 +468,25 @@ def test_model_serializer_plain_json_return_type():
     class MyModel(BaseModel):
         a: int
 
-        @model_serializer(json_return_type='str_subclass')
-        def _serialize(self):
+        @model_serializer(when_used='json')
+        def _serialize(self) -> str:
             if self.a == 666:
                 return self.a
             else:
                 return f'MyModel(a={self.a!r})'
 
     m = MyModel(a=1)
-    assert m.model_dump() == 'MyModel(a=1)'
+    assert m.model_dump() == {'a': 1}
     assert m.model_dump(mode='json') == 'MyModel(a=1)'
     assert m.model_dump_json() == '"MyModel(a=1)"'
 
     m = MyModel(a=666)
-    assert m.model_dump() == 666
-    with pytest.raises(TypeError, match="^'int' object cannot be converted to 'PyString'$"):
-        m.model_dump(mode='json')
+    assert m.model_dump() == {'a': 666}
+    with pytest.warns(UserWarning, match='Expected `str` but got `int` - serialized value may not be as expected'):
+        assert m.model_dump(mode='json') == 666
 
-    msg = "^Error serializing to JSON: 'int' object cannot be converted to 'PyString'$"
-    with pytest.raises(PydanticSerializationError, match=msg):
-        m.model_dump_json()
+    with pytest.warns(UserWarning, match='Expected `str` but got `int` - serialized value may not be as expected'):
+        assert m.model_dump_json() == '666'
 
 
 def test_model_serializer_wrong_args():
@@ -527,12 +535,12 @@ def test_field_multiple_serializer():
             x: int
             y: int
 
-            @field_serializer('x', 'y', json_return_type='str')
-            def serializer1(v):
+            @field_serializer('x', 'y')
+            def serializer1(v) -> str:
                 return f'{v:,}'
 
-            @field_serializer('x', json_return_type='str')
-            def serializer2(v):
+            @field_serializer('x')
+            def serializer2(v) -> str:
                 return v
 
 
@@ -540,13 +548,13 @@ def test_field_multiple_serializer_subclass():
     class MyModel(BaseModel):
         x: int
 
-        @field_serializer('x', json_return_type='str')
-        def serializer1(v):
+        @field_serializer('x')
+        def serializer1(v) -> str:
             return f'{v:,}'
 
     class MySubModel(MyModel):
-        @field_serializer('x', json_return_type='str')
-        def serializer1(v):
+        @field_serializer('x')
+        def serializer1(v) -> str:
             return f'{v}'
 
     assert MyModel(x=1234).model_dump() == {'x': '1,234'}
@@ -608,7 +616,7 @@ def test_serialize_partial(
     class MyModel(BaseModel):
         x: int
 
-        ser = field_serializer('x', json_return_type='str')(partial(func, expected=1234))
+        ser = field_serializer('x', return_type=str)(partial(func, expected=1234))
 
     assert MyModel(x=1234).model_dump() == {'x': '1,234'}
 
@@ -632,7 +640,7 @@ def test_serialize_partialmethod(
     class MyModel(BaseModel):
         x: int
 
-        ser = field_serializer('x', json_return_type='str')(partialmethod(func, expected=1234))
+        ser = field_serializer('x', return_type=str)(partialmethod(func, expected=1234))
 
     assert MyModel(x=1234).model_dump() == {'x': '1,234'}
 
@@ -835,3 +843,97 @@ def test_model_serializer_nested_models() -> None:
         'x': 3,
         'inner': {'x': 2, 'inner': {'x': 1, 'inner': None}},
     }
+
+
+def test_pattern_serialize():
+    ta = TypeAdapter(Pattern[str])
+    pattern = re.compile('^regex$')
+    assert ta.dump_python(pattern) == pattern
+    assert ta.dump_python(pattern, mode='json') == '^regex$'
+    assert ta.dump_json(pattern) == b'"^regex$"'
+
+
+def test_custom_return_schema():
+    class Model(BaseModel):
+        x: int
+
+        @field_serializer('x', return_type=str)
+        def ser_model(self, v) -> int:
+            return repr(v)
+
+    return_serializer = re.search(r'return_serializer: *\w+', repr(Model.__pydantic_serializer__)).group(0)
+    assert return_serializer == 'return_serializer: Str'
+
+
+def test_clear_return_schema():
+    class Model(BaseModel):
+        x: int
+
+        @field_serializer('x', return_type=Any)
+        def ser_model(self, v) -> int:
+            return repr(v)
+
+    return_serializer = re.search(r'return_serializer: *\w+', repr(Model.__pydantic_serializer__)).group(0)
+    assert return_serializer == 'return_serializer: Any'
+
+
+def test_type_adapter_dump_json():
+    class Model(TypedDict):
+        x: int
+        y: float
+
+        @model_serializer(mode='plain')
+        def ser_model(self) -> Dict[str, Any]:
+            return {'x': self['x'] * 2, 'y': self['y'] * 3}
+
+    ta = TypeAdapter(Model)
+
+    assert ta.dump_json(Model({'x': 1, 'y': 2.5})) == b'{"x":2,"y":7.5}'
+
+
+def test_custom_secret_type_python_serializer():
+    """
+    test for non json serializer in pydantic.types._SecretFieldValidator.serialize.
+    most of the code in this test are just a copy from original implementation.
+    """
+
+    class MySecretFieldValidator(_SecretFieldValidator):
+        def __get_pydantic_core_schema__(
+            self, source: Type[Any], handler: GetCoreSchemaHandler
+        ) -> core_schema.CoreSchema:
+            self.inner_schema = handler(str if self.field_type is SecretStr else bytes)
+            error_kind = 'string_type' if self.field_type is SecretStr else 'bytes_type'
+            return core_schema.general_after_validator_function(
+                self.validate,
+                core_schema.union_schema(
+                    [core_schema.is_instance_schema(self.field_type), self.inner_schema],
+                    strict=True,
+                    custom_error_type=error_kind,
+                ),
+                serialization=core_schema.plain_serializer_function_ser_schema(
+                    self.serialize,
+                    info_arg=True,
+                    return_schema=core_schema.str_schema(),
+                    when_used='always',  # change it to `always` to call `serialize` for python and json
+                ),
+            )
+
+    class MySecretStr(SecretField[str]):
+        @classmethod
+        def __prepare_pydantic_annotations__(
+            cls, source: Type[Any], annotations: Tuple[Any, ...], _config: ConfigDict
+        ) -> Tuple[Any, Iterable[Any]]:
+            metadata, remaining_annotations = _known_annotated_metadata.collect_known_metadata(annotations)
+            _known_annotated_metadata.check_metadata(metadata, {'min_length', 'max_length'}, cls)
+            return (
+                source,
+                (
+                    MySecretFieldValidator(source, **metadata),
+                    *remaining_annotations,
+                ),
+            )
+
+    gen = GenerateSchema(ConfigWrapper({}), None)
+    schema = gen.generate_schema(MySecretStr)
+    serializer = SchemaSerializer(schema)
+    assert serializer.to_python('foo bar') == 'foo bar'

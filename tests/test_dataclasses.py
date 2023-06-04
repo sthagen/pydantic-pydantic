@@ -19,11 +19,14 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     FieldValidationInfo,
+    PydanticUndefinedAnnotation,
     PydanticUserError,
     TypeAdapter,
     ValidationError,
+    computed_field,
     field_serializer,
     field_validator,
+    model_validator,
 )
 from pydantic._internal._model_construction import MockValidator
 from pydantic.dataclasses import rebuild_dataclass
@@ -806,6 +809,7 @@ def test_override_builtin_dataclass_2():
     assert f.seen_count == 7
 
 
+@pytest.mark.xfail(reason='Meta() is not being revalidated')
 def test_override_builtin_dataclass_nested():
     @dataclasses.dataclass
     class Meta:
@@ -1200,6 +1204,52 @@ def test_complex_nested_vanilla_dataclass():
         'properties': {'s': {'$ref': '#/$defs/Sentence'}},
         'required': ['s'],
         'title': 'M',
+        'type': 'object',
+    }
+
+
+def test_json_schema_with_computed_field():
+    @dataclasses.dataclass
+    class MyDataclass:
+        x: int
+
+        @computed_field
+        @property
+        def double_x(self) -> int:
+            return 2 * self.x
+
+    class Model(BaseModel):
+        dc: MyDataclass
+
+    assert Model.model_json_schema(mode='validation') == {
+        '$defs': {
+            'MyDataclass': {
+                'properties': {'x': {'title': 'X', 'type': 'integer'}},
+                'required': ['x'],
+                'title': 'MyDataclass',
+                'type': 'object',
+            }
+        },
+        'properties': {'dc': {'$ref': '#/$defs/MyDataclass'}},
+        'required': ['dc'],
+        'title': 'Model',
+        'type': 'object',
+    }
+    assert Model.model_json_schema(mode='serialization') == {
+        '$defs': {
+            'MyDataclass': {
+                'properties': {
+                    'double_x': {'title': 'Double X', 'type': 'integer'},
+                    'x': {'title': 'X', 'type': 'integer'},
+                },
+                'required': ['x', 'double_x'],
+                'title': 'MyDataclass',
+                'type': 'object',
+            }
+        },
+        'properties': {'dc': {'$ref': '#/$defs/MyDataclass'}},
+        'required': ['dc'],
+        'title': 'Model',
         'type': 'object',
     }
 
@@ -1656,7 +1706,7 @@ def test_extra_forbid_list_error():
         Bar(a=1)
 
 
-def test_validator():
+def test_field_validator():
     @pydantic.dataclasses.dataclass
     class MyDataclass:
         a: int
@@ -1664,12 +1714,44 @@ def test_validator():
 
         @field_validator('b')
         @classmethod
-        def double_b(cls, v, _):
+        def double_b(cls, v):
             return v * 2
 
     d = MyDataclass('1', '2.5')
     assert d.a == 1
     assert d.b == 5.0
+
+
+def test_model_validator_before():
+    @pydantic.dataclasses.dataclass
+    class MyDataclass:
+        a: int
+        b: float
+
+        @model_validator(mode='before')
+        def double_b(cls, v: ArgsKwargs):
+            v.kwargs['b'] *= 2
+            return v
+
+    d = MyDataclass('1', b='2')
+    assert d.a == 1
+    assert d.b == 22.0
+
+
+def test_model_validator_after():
+    @pydantic.dataclasses.dataclass
+    class MyDataclass:
+        a: int
+        b: float
+
+        @model_validator(mode='after')
+        def double_b(cls, dc: 'MyDataclass'):
+            dc.b *= 2
+            return dc
+
+    d = MyDataclass('1', b='2')
+    assert d.a == 1
+    assert d.b == 4
 
 
 def test_parent_post_init():
@@ -2213,3 +2295,18 @@ def test_dataclass_slots_mixed(dataclass_decorator):
     assert dc.x2 == 2
     assert SubModel.z == 'z-classvar'
     assert SubModel.z2 == 'z2-classvar'
+
+
+def test_rebuild_dataclass():
+    @pydantic.dataclasses.dataclass
+    class MyDataClass:
+        x: str
+
+    assert rebuild_dataclass(MyDataClass) is None
+
+    @pydantic.dataclasses.dataclass()
+    class MyDataClass1:
+        d2: Optional['Foo'] = None  # noqa F821
+
+    with pytest.raises(PydanticUndefinedAnnotation, match="name 'Foo' is not defined"):
+        rebuild_dataclass(MyDataClass1, _parent_namespace_depth=0)

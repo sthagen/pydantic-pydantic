@@ -6,9 +6,8 @@ from annotated_types import BaseMetadata, GroupedMetadata, Gt, Lt
 from pydantic_core import core_schema
 from typing_extensions import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, GetCoreSchemaHandler
 from pydantic._internal._fields import Undefined
-from pydantic.annotated import GetCoreSchemaHandler
 from pydantic.errors import PydanticSchemaGenerationError
 
 NO_VALUE = object()
@@ -232,12 +231,12 @@ def test_modify_get_schema_annotated() -> None:
     class _(BaseModel):
         x: Annotated[CustomType, GroupedMetadataMarker(), PydanticMetadata()]
 
+    # insert_assert(calls)
     assert calls == [
         'GroupedMetadataMarker:iter',
         'PydanticMetadata:before',
         'CustomType:before',
         'CustomType:after',
-        'GroupedMetadataMarker:iter',
         'PydanticMetadata:after',
     ]
 
@@ -246,13 +245,13 @@ def test_modify_get_schema_annotated() -> None:
     class _(BaseModel):
         x: Annotated[CustomType, PydanticMetadata(), GroupedMetadataMarker()]
 
+    # insert_assert(calls)
     assert calls == [
         'GroupedMetadataMarker:iter',
         'PydanticMetadata:before',
         'CustomType:before',
         'CustomType:after',
         'PydanticMetadata:after',
-        'GroupedMetadataMarker:iter',
     ]
 
     calls.clear()

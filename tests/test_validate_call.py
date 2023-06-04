@@ -12,6 +12,7 @@ from typing_extensions import Annotated
 from pydantic import Field, TypeAdapter, ValidationError, validate_call
 
 skip_pre_38 = pytest.mark.skipif(sys.version_info < (3, 8), reason='testing >= 3.8 behaviour only')
+skip_pre_39 = pytest.mark.skipif(sys.version_info < (3, 9), reason='testing >= 3.9 behaviour only')
 
 
 def test_args():
@@ -183,7 +184,7 @@ def test_annotated_field_can_provide_factory() -> None:
     assert foo2(1) == 100
 
 
-@pytest.mark.skipif(sys.version_info < (3, 8), reason='testing >= 3.8 behaviour only')
+@skip_pre_38
 def test_positional_only(create_module):
     module = create_module(
         # language=Python
@@ -373,7 +374,7 @@ def test_item_method():
     ]
 
 
-@pytest.mark.skipif(sys.version_info < (3, 9), reason='testing >= 3.9 behaviour only')
+@skip_pre_39
 def test_class_method():
     class X:
         @classmethod
@@ -409,6 +410,63 @@ def test_json_schema():
         'properties': {'a': {'title': 'A', 'type': 'integer'}, 'b': {'default': None, 'title': 'B', 'type': 'integer'}},
         'required': ['a'],
         'additionalProperties': False,
+    }
+
+    # TODO: Uncomment when support for 3.7 is dropped.
+    # @validate_call
+    # def foo(a: int, /, b: int):
+    #     return f'{a}, {b}'
+
+    # assert foo(1, 2) == '1, 2'
+    # assert TypeAdapter(foo).json_schema() == {
+    #     'maxItems': 2,
+    #     'minItems': 2,
+    #     'prefixItems': [{'title': 'A', 'type': 'integer'}, {'title': 'B', 'type': 'integer'}],
+    #     'type': 'array',
+    # }
+
+    # @validate_call
+    # def foo(a: int, /, *, b: int, c: int):
+    #     return f'{a}, {b}, {c}'
+
+    # assert foo(1, b=2, c=3) == '1, 2, 3'
+    # with pytest.raises(
+    #     PydanticInvalidForJsonSchema,
+    #     match=(
+    #       'Unable to generate JSON schema for arguments validator '
+    #       'with positional-only and keyword-only arguments'
+    #     ),
+    # ):
+    #     TypeAdapter(foo).json_schema()
+
+    @validate_call
+    def foo(*numbers: int) -> int:
+        return sum(numbers)
+
+    assert foo(1, 2, 3) == 6
+    assert TypeAdapter(foo).json_schema() == {'items': {'type': 'integer'}, 'prefixItems': [], 'type': 'array'}
+
+    @validate_call
+    def foo(**scores: int) -> str:
+        return ', '.join(f'{k}={v}' for k, v in sorted(scores.items()))
+
+    assert foo(a=1, b=2) == 'a=1, b=2'
+    assert TypeAdapter(foo).json_schema() == {
+        'additionalProperties': {'type': 'integer'},
+        'properties': {},
+        'type': 'object',
+    }
+
+    @validate_call
+    def foo(a: Annotated[int, Field(..., alias='A')]):
+        return a
+
+    assert foo(1) == 1
+    assert TypeAdapter(foo).json_schema() == {
+        'additionalProperties': False,
+        'properties': {'A': {'title': 'A', 'type': 'integer'}},
+        'required': ['A'],
+        'type': 'object',
     }
 
 
@@ -494,6 +552,14 @@ def test_populate_by_name():
     assert foo(a=10, c=1) == 11
 
 
+def test_validate_return():
+    @validate_call(config=dict(validate_return=True))
+    def foo(a: int, b: int) -> int:
+        return a + b
+
+    assert foo(1, 2) == 3
+
+
 def test_validate_all():
     @validate_call(config=dict(validate_default=True))
     def foo(dt: datetime = Field(default_factory=lambda: 946684800)):
@@ -503,7 +569,7 @@ def test_validate_all():
     assert foo(0) == datetime(1970, 1, 1)
 
 
-@pytest.mark.skipif(sys.version_info < (3, 8), reason='testing >= 3.8 behaviour only')
+@skip_pre_38
 def test_validate_all_positional(create_module):
     module = create_module(
         # language=Python
@@ -542,7 +608,7 @@ def test_validator_init():
         Foo(1, 'x')
 
 
-@pytest.mark.skipif(sys.version_info < (3, 8), reason='testing >= 3.8 behaviour only')
+@skip_pre_38
 def test_positional_and_keyword_with_same_name(create_module):
     module = create_module(
         # language=Python

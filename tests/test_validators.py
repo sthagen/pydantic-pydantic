@@ -32,7 +32,7 @@ V1_VALIDATOR_DEPRECATION_MATCH = r'Pydantic V1 style `@validator` validators are
 
 
 def test_annotated_validator_after() -> None:
-    MyInt = Annotated[int, AfterValidator(lambda x: x if x != -1 else 0)]
+    MyInt = Annotated[int, AfterValidator(lambda x, _info: x if x != -1 else 0)]
 
     class Model(BaseModel):
         x: MyInt
@@ -45,7 +45,7 @@ def test_annotated_validator_after() -> None:
 
 
 def test_annotated_validator_before() -> None:
-    FloatMaybeInf = Annotated[float, BeforeValidator(lambda x: x if x != 'zero' else 0.0)]
+    FloatMaybeInf = Annotated[float, BeforeValidator(lambda x, _info: x if x != 'zero' else 0.0)]
 
     class Model(BaseModel):
         x: FloatMaybeInf
@@ -56,7 +56,7 @@ def test_annotated_validator_before() -> None:
 
 
 def test_annotated_validator_plain() -> None:
-    MyInt = Annotated[int, PlainValidator(lambda x: x if x != -1 else 0)]
+    MyInt = Annotated[int, PlainValidator(lambda x, _info: x if x != -1 else 0)]
 
     class Model(BaseModel):
         x: MyInt
@@ -1012,6 +1012,21 @@ def test_validation_each_item():
     assert Model(foobar={1: 1}).foobar == {1: 2}
 
 
+def test_validation_each_item_invalid_type():
+    with pytest.raises(
+        TypeError, match=re.escape('@validator(..., each_item=True)` cannot be applied to fields with a schema of int')
+    ):
+        with pytest.warns(DeprecationWarning, match=V1_VALIDATOR_DEPRECATION_MATCH):
+
+            class Model(BaseModel):
+                foobar: int
+
+                @validator('foobar', each_item=True)
+                @classmethod
+                def check_foobar(cls, v: Any):
+                    ...
+
+
 def test_validation_each_item_nullable():
     with pytest.warns(DeprecationWarning, match=V1_VALIDATOR_DEPRECATION_MATCH):
 
@@ -1762,7 +1777,6 @@ def test_validating_assignment_pre_root_validator_fail():
     ]
 
 
-@pytest.mark.xfail(reason='Something weird going on with model_validator and assignment')
 def test_validating_assignment_model_validator_before_fail():
     class Model(BaseModel):
         current_value: float = Field(..., alias='current')
@@ -1772,7 +1786,7 @@ def test_validating_assignment_model_validator_before_fail():
 
         @model_validator(mode='before')
         def values_are_not_string(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-            print(values)
+            assert isinstance(values, dict)
             if any(isinstance(x, str) for x in values.values()):
                 raise ValueError('values cannot be a string')
             return values

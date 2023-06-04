@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Type
 import pytest
 from typing_extensions import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PydanticUserError, ValidationError, root_validator
+from pydantic import BaseModel, ConfigDict, Field, PydanticUserError, ValidationError, conlist, root_validator
 from pydantic.config import Extra
 from pydantic.deprecated.decorator import validate_arguments
 from pydantic.deprecated.json import custom_pydantic_encoder, pydantic_encoder, timedelta_isoformat
@@ -287,6 +287,21 @@ def test_parse_raw_pass_fail():
     ]
 
 
+def test_fields():
+    class Model(BaseModel):
+        x: int
+        y: int = 2
+
+    m = Model(x=1)
+    assert len(Model.model_fields) == 2
+    assert len(m.model_fields) == 2
+    match = '^The `__fields__` attribute is deprecated, use `model_fields` instead.$'
+    with pytest.warns(DeprecationWarning, match=match):
+        assert len(Model.__fields__) == 2
+    with pytest.warns(DeprecationWarning, match=match):
+        assert len(m.__fields__) == 2
+
+
 def test_fields_set():
     class Model(BaseModel):
         x: int
@@ -405,6 +420,13 @@ def test_unique_items_items():
             x: List[int] = Field(None, unique_items=True)
 
 
+def test_unique_items_conlist():
+    with pytest.raises(PydanticUserError, match='`unique_items` is removed. use `Set` instead'):
+
+        class Model(BaseModel):
+            x: conlist(int, unique_items=True)
+
+
 def test_allow_mutation():
     m = '`allow_mutation` is deprecated and will be removed. use `frozen` instead'
     with pytest.warns(DeprecationWarning, match=m):
@@ -432,6 +454,20 @@ def test_field_regex():
 
         class Model(BaseModel):
             x: str = Field('test', regex=r'^test$')
+
+
+def test_modify_schema_error():
+    with pytest.raises(
+        PydanticUserError,
+        match='The `__modify_schema__` method is not supported in Pydantic v2. '
+        'Use `__get_pydantic_json_schema__` instead.',
+    ):
+
+        class Model(BaseModel):
+            def __modify_schema__(self, field_schema: Dict[str, Any]) -> None:
+                pass
+
+        Model()
 
 
 def test_field_extra_arguments():

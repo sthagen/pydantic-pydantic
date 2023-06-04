@@ -3,14 +3,17 @@ Tests for TypedDict
 """
 import sys
 import typing
-from typing import Generic, List, Optional, TypeVar
+from typing import Any, Dict, Generic, List, Optional, TypeVar
 
 import pytest
 import typing_extensions
 from annotated_types import Lt
+from pydantic_core import core_schema
 from typing_extensions import Annotated, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, PydanticUserError, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, PositiveInt, PydanticUserError, ValidationError
+from pydantic.functional_serializers import field_serializer, model_serializer
+from pydantic.functional_validators import field_validator, model_validator
 from pydantic.type_adapter import TypeAdapter
 
 from .conftest import Err
@@ -35,7 +38,7 @@ def fixture_typed_dict(TypedDictAll):
     class TestTypedDict(TypedDictAll):
         foo: str
 
-    if sys.version_info < (3, 11) and TypedDictAll.__module__ == 'typing':
+    if sys.version_info < (3, 12) and TypedDictAll.__module__ == 'typing':
         pytest.skip('typing.TypedDict does not track required keys correctly on Python < 3.11')
 
     if hasattr(TestTypedDict, '__required_keys__'):
@@ -68,7 +71,7 @@ def test_typeddict_all(TypedDictAll):
             d: MyDict
 
     except PydanticUserError as e:
-        assert e.message == 'Please use `typing_extensions.TypedDict` instead of `typing.TypedDict` on Python < 3.11.'
+        assert e.message == 'Please use `typing_extensions.TypedDict` instead of `typing.TypedDict` on Python < 3.12.'
     else:
         assert M(d=dict(foo='baz')).d == {'foo': 'baz'}
 
@@ -190,16 +193,73 @@ def test_typeddict_schema(TypedDict):
     class DataTD(TypedDict):
         a: int
 
+    class CustomTD(TypedDict):
+        b: int
+
+        @classmethod
+        def __get_pydantic_core_schema__(
+            cls, source_type: Any, handler: GetCoreSchemaHandler
+        ) -> core_schema.CoreSchema:
+            schema = handler(source_type)
+            schema['computed_fields'] = [
+                core_schema.computed_field(property_name='another_b', return_schema=core_schema.int_schema())
+            ]
+            return schema
+
     class Model(BaseModel):
         data: Data
         data_td: DataTD
+        custom_td: CustomTD
 
-    assert Model.model_json_schema() == {
+    assert Model.model_json_schema(mode='validation') == {
         'title': 'Model',
         'type': 'object',
-        'properties': {'data': {'$ref': '#/$defs/Data'}, 'data_td': {'$ref': '#/$defs/DataTD'}},
-        'required': ['data', 'data_td'],
+        'properties': {
+            'custom_td': {'$ref': '#/$defs/CustomTD'},
+            'data': {'$ref': '#/$defs/Data'},
+            'data_td': {'$ref': '#/$defs/DataTD'},
+        },
+        'required': ['data', 'data_td', 'custom_td'],
         '$defs': {
+            'CustomTD': {
+                'type': 'object',
+                'title': 'CustomTD',
+                'properties': {'b': {'title': 'B', 'type': 'integer'}},
+                'required': ['b'],
+            },
+            'Data': {
+                'type': 'object',
+                'title': 'Data',
+                'properties': {'a': {'title': 'A', 'type': 'integer'}},
+                'required': ['a'],
+            },
+            'DataTD': {
+                'type': 'object',
+                'title': 'DataTD',
+                'properties': {'a': {'title': 'A', 'type': 'integer'}},
+                'required': ['a'],
+            },
+        },
+    }
+    assert Model.model_json_schema(mode='serialization') == {
+        'title': 'Model',
+        'type': 'object',
+        'properties': {
+            'custom_td': {'$ref': '#/$defs/CustomTD'},
+            'data': {'$ref': '#/$defs/Data'},
+            'data_td': {'$ref': '#/$defs/DataTD'},
+        },
+        'required': ['data', 'data_td', 'custom_td'],
+        '$defs': {
+            'CustomTD': {
+                'type': 'object',
+                'title': 'CustomTD',
+                'properties': {
+                    'b': {'title': 'B', 'type': 'integer'},
+                    'another_b': {'title': 'Another B', 'type': 'integer'},
+                },
+                'required': ['b', 'another_b'],
+            },
             'Data': {
                 'type': 'object',
                 'title': 'Data',
@@ -625,6 +685,7 @@ def test_recursive_generic_typeddict_in_function_3():
     ]
 
 
+@pytest.mark.xfail(reason='Needs https://github.com/pydantic/pydantic/pull/5944')
 def test_typeddict_alias_generator(TypedDict):
     def alias_generator(name: str) -> str:
         return 'alias_' + name
@@ -635,14 +696,136 @@ def test_typeddict_alias_generator(TypedDict):
     class Model(BaseModel):
         d: MyDict
 
-    analyzed = TypeAdapter(MyDict, config=ConfigDict(alias_generator=alias_generator))
-    model = analyzed.validate_python({'alias_foo': 'bar'})
+    ta = TypeAdapter(MyDict, config=ConfigDict(alias_generator=alias_generator))
+    model = ta.validate_python({'alias_foo': 'bar'})
 
     assert model['foo'] == 'bar'
 
     with pytest.raises(ValidationError) as exc_info:
-        analyzed.validate_python({'foo': 'bar'})
+        ta.validate_python({'foo': 'bar'})
     assert exc_info.value.errors(include_url=False) == [
         {'type': 'missing', 'loc': ('alias_foo',), 'msg': 'Field required', 'input': {'foo': 'bar'}},
         {'input': 'bar', 'loc': ('foo',), 'msg': 'Extra inputs are not permitted', 'type': 'extra_forbidden'},
     ]
+
+
+def test_typeddict_inheritence(TypedDict: Any) -> None:
+    class Parent(TypedDict):
+        x: int
+
+    class Child(Parent):
+        y: float
+
+    ta = TypeAdapter(Child)
+    assert ta.validate_python({'x': '1', 'y': '1.0'}) == {'x': 1, 'y': 1.0}
+
+
+def test_typeddict_field_validator(TypedDict: Any) -> None:
+    class Parent(TypedDict):
+        a: List[str]
+
+        @field_validator('a')
+        @classmethod
+        def parent_val_before(cls, v: List[str]):
+            v.append('parent before')
+            return v
+
+        @field_validator('a')
+        @classmethod
+        def val(cls, v: List[str]):
+            v.append('parent')
+            return v
+
+        @field_validator('a')
+        @classmethod
+        def parent_val_after(cls, v: List[str]):
+            v.append('parent after')
+            return v
+
+    class Child(Parent):
+        @field_validator('a')
+        @classmethod
+        def child_val_before(cls, v: List[str]):
+            v.append('child before')
+            return v
+
+        @field_validator('a')
+        @classmethod
+        def val(cls, v: List[str]):
+            v.append('child')
+            return v
+
+        @field_validator('a')
+        @classmethod
+        def child_val_after(cls, v: List[str]):
+            v.append('child after')
+            return v
+
+    parent_ta = TypeAdapter(Parent)
+    child_ta = TypeAdapter(Child)
+
+    assert parent_ta.validate_python({'a': []})['a'] == ['parent before', 'parent', 'parent after']
+    assert child_ta.validate_python({'a': []})['a'] == [
+        'parent before',
+        'child',
+        'parent after',
+        'child before',
+        'child after',
+    ]
+
+
+def test_typeddict_model_validator(TypedDict) -> None:
+    class Model(TypedDict):
+        x: int
+        y: float
+
+        @model_validator(mode='before')
+        @classmethod
+        def val_model_before(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+            return dict(x=value['x'] + 1, y=value['y'] + 2)
+
+        @model_validator(mode='after')
+        def val_model_after(self) -> 'Model':
+            return Model(x=self['x'] * 2, y=self['y'] * 3)
+
+    ta = TypeAdapter(Model)
+
+    assert ta.validate_python({'x': 1, 'y': 2.5}) == {'x': 4, 'y': 13.5}
+
+
+def test_typeddict_field_serializer(TypedDict: Any) -> None:
+    class Parent(TypedDict):
+        a: List[str]
+
+        @field_serializer('a')
+        @classmethod
+        def ser(cls, v: List[str]):
+            v.append('parent')
+            return v
+
+    class Child(Parent):
+        @field_serializer('a')
+        @classmethod
+        def ser(cls, v: List[str]):
+            v.append('child')
+            return v
+
+    parent_ta = TypeAdapter(Parent)
+    child_ta = TypeAdapter(Child)
+
+    assert parent_ta.dump_python(Parent({'a': []}))['a'] == ['parent']
+    assert child_ta.dump_python(Child({'a': []}))['a'] == ['child']
+
+
+def test_typeddict_model_serializer(TypedDict) -> None:
+    class Model(TypedDict):
+        x: int
+        y: float
+
+        @model_serializer(mode='plain')
+        def ser_model(self) -> Dict[str, Any]:
+            return {'x': self['x'] * 2, 'y': self['y'] * 3}
+
+    ta = TypeAdapter(Model)
+
+    assert ta.dump_python(Model({'x': 1, 'y': 2.5})) == {'x': 2, 'y': 7.5}

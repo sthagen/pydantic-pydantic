@@ -36,6 +36,7 @@ from typing_extensions import Annotated, Literal, OrderedDict, TypeVarTuple, Unp
 from pydantic import (
     BaseModel,
     Field,
+    GetCoreSchemaHandler,
     Json,
     PositiveInt,
     PydanticSchemaGenerationError,
@@ -56,7 +57,6 @@ from pydantic._internal._generics import (
     recursively_defined_type_refs,
     replace_types,
 )
-from pydantic.annotated import GetCoreSchemaHandler
 
 
 @pytest.fixture()
@@ -1429,6 +1429,37 @@ def test_deep_generic_with_multiple_inheritance():
 
 def test_generic_with_referenced_generic_type_1():
     T = TypeVar('T')
+
+    class ModelWithType(BaseModel, Generic[T]):
+        # Type resolves to type origin of "type" which is non-subscriptible for
+        # python < 3.9 so we want to make sure it works for other versions
+        some_type: Type[T]
+
+    class ReferenceModel(BaseModel, Generic[T]):
+        abstract_base_with_type: ModelWithType[T]
+
+    ReferenceModel[int]
+
+
+def test_generic_with_referenced_generic_type_bound():
+    T = TypeVar('T', bound=int)
+
+    class ModelWithType(BaseModel, Generic[T]):
+        # Type resolves to type origin of "type" which is non-subscriptible for
+        # python < 3.9 so we want to make sure it works for other versions
+        some_type: Type[T]
+
+    class ReferenceModel(BaseModel, Generic[T]):
+        abstract_base_with_type: ModelWithType[T]
+
+    class MyInt(int):
+        ...
+
+    ReferenceModel[MyInt]
+
+
+def test_generic_with_referenced_generic_type_constraints():
+    T = TypeVar('T', int, str)
 
     class ModelWithType(BaseModel, Generic[T]):
         # Type resolves to type origin of "type" which is non-subscriptible for

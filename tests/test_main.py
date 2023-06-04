@@ -3,6 +3,7 @@ import platform
 import re
 import sys
 from copy import deepcopy
+from dataclasses import dataclass
 from enum import Enum
 from typing import (
     Any,
@@ -28,6 +29,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    GetCoreSchemaHandler,
     PrivateAttr,
     PydanticUndefinedAnnotation,
     PydanticUserError,
@@ -37,7 +39,6 @@ from pydantic import (
     constr,
     field_validator,
 )
-from pydantic.annotated import GetCoreSchemaHandler
 
 
 def test_success():
@@ -1885,7 +1886,7 @@ def test_model_rebuild_localns():
         x: int
 
     class B(BaseModel):
-        a: 'Model'  # noqa F821
+        a: 'Model'  # noqa: F821
 
     B.model_rebuild(_types_namespace={'Model': A})
 
@@ -1894,10 +1895,26 @@ def test_model_rebuild_localns():
     assert isinstance(m.a, A)
 
     class C(BaseModel):
-        a: 'Model'  # noqa F821
+        a: 'Model'  # noqa: F821
 
     with pytest.raises(PydanticUndefinedAnnotation, match="name 'Model' is not defined"):
         C.model_rebuild(_types_namespace={'A': A})
+
+
+def test_model_rebuild_zero_depth():
+    class Model(BaseModel):
+        x: 'X_Type'
+
+    X_Type = str
+
+    with pytest.raises(NameError, match='X_Type'):
+        Model.model_rebuild(_parent_namespace_depth=0)
+
+    Model.__pydantic_parent_namespace__.update({'X_Type': int})
+    Model.model_rebuild(_parent_namespace_depth=0)
+
+    m = Model(x=42)
+    assert m.model_dump() == {'x': 42}
 
 
 @pytest.fixture(scope='session', name='InnerEqualityModel')
@@ -1987,6 +2004,40 @@ def test_model_equality_private_attrs(InnerEqualityModel):
     assert m3 == m3_equal
 
 
+def test_model_copy_extra():
+    class Model(BaseModel, extra='allow'):
+        x: int
+
+    m = Model(x=1, y=2)
+    assert m.model_dump() == {'x': 1, 'y': 2}
+    assert m.model_extra == {'y': 2}
+    m2 = m.model_copy()
+    assert m2.model_dump() == {'x': 1, 'y': 2}
+    assert m2.model_extra == {'y': 2}
+
+    m3 = m.model_copy(update={'x': 4, 'z': 3})
+    assert m3.model_dump() == {'x': 4, 'y': 2, 'z': 3}
+    assert m3.model_extra == {'y': 2, 'z': 3}
+
+    m4 = m.model_copy(update={'x': 4, 'z': 3})
+    assert m4.model_dump() == {'x': 4, 'y': 2, 'z': 3}
+    assert m4.model_extra == {'y': 2, 'z': 3}
+
+    m = Model(x=1, a=2)
+    m.__pydantic_extra__ = None
+    m5 = m.model_copy(update={'x': 4, 'b': 3})
+    assert m5.model_dump() == {'x': 4, 'b': 3}
+    assert m5.model_extra == {'b': 3}
+
+
+def test_model_parametrized_name_not_generic():
+    class Model(BaseModel):
+        x: int
+
+    with pytest.raises(TypeError, match='Concrete names should only be generated for generic models.'):
+        Model.model_parametrized_name(())
+
+
 def test_model_equality_generics():
     T = TypeVar('T')
 
@@ -2034,14 +2085,10 @@ def test_model_validate_strict() -> None:
     assert LaxModel.model_validate({'x': '1'}, strict=False) == LaxModel(x=1)
     with pytest.raises(ValidationError) as exc_info:
         LaxModel.model_validate({'x': '1'}, strict=True)
+    # there's no such thing on the model itself
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {
-            'type': 'model_class_type',
-            'loc': (),
-            'msg': 'Input should be an instance of LaxModel',
-            'input': {'x': '1'},
-            'ctx': {'class_name': 'LaxModel'},
-        }
+        {'type': 'int_type', 'loc': ('x',), 'msg': 'Input should be a valid integer', 'input': '1'}
     ]
 
     with pytest.raises(ValidationError) as exc_info:
@@ -2052,14 +2099,9 @@ def test_model_validate_strict() -> None:
     assert StrictModel.model_validate({'x': '1'}, strict=False) == StrictModel(x=1)
     with pytest.raises(ValidationError) as exc_info:
         LaxModel.model_validate({'x': '1'}, strict=True)
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {
-            'type': 'model_class_type',
-            'loc': (),
-            'msg': 'Input should be an instance of LaxModel',
-            'input': {'x': '1'},
-            'ctx': {'class_name': 'LaxModel'},
-        }
+        {'type': 'int_type', 'loc': ('x',), 'msg': 'Input should be a valid integer', 'input': '1'}
     ]
 
 
@@ -2263,3 +2305,59 @@ def test_nested_types_ignored():
 
         class BadModel(BaseModel):
             x = NonNestedType
+
+
+def test_validate_python_from_attributes() -> None:
+    class Model(BaseModel):
+        x: int
+
+    class ModelFromAttributesTrue(Model):
+        model_config = ConfigDict(from_attributes=True)
+
+    class ModelFromAttributesFalse(Model):
+        model_config = ConfigDict(from_attributes=False)
+
+    @dataclass
+    class UnrelatedClass:
+        x: int = 1
+
+    input = UnrelatedClass(1)
+
+    for from_attributes in (False, None):
+        with pytest.raises(ValidationError) as exc_info:
+            Model.model_validate(UnrelatedClass(), from_attributes=from_attributes)
+        assert exc_info.value.errors(include_url=False) == [
+            {'type': 'dict_type', 'loc': (), 'msg': 'Input should be a valid dictionary', 'input': input}
+        ]
+
+    res = Model.model_validate(UnrelatedClass(), from_attributes=True)
+    assert res == Model(x=1)
+
+    with pytest.raises(ValidationError) as exc_info:
+        ModelFromAttributesTrue.model_validate(UnrelatedClass(), from_attributes=False)
+    assert exc_info.value.errors(include_url=False) == [
+        {'type': 'dict_type', 'loc': (), 'msg': 'Input should be a valid dictionary', 'input': input}
+    ]
+
+    for from_attributes in (True, None):
+        res = ModelFromAttributesTrue.model_validate(UnrelatedClass(), from_attributes=from_attributes)
+        assert res == ModelFromAttributesTrue(x=1)
+
+    for from_attributes in (False, None):
+        with pytest.raises(ValidationError) as exc_info:
+            ModelFromAttributesFalse.model_validate(UnrelatedClass(), from_attributes=from_attributes)
+        assert exc_info.value.errors(include_url=False) == [
+            {'type': 'dict_type', 'loc': (), 'msg': 'Input should be a valid dictionary', 'input': input}
+        ]
+
+    res = ModelFromAttributesFalse.model_validate(UnrelatedClass(), from_attributes=True)
+    assert res == ModelFromAttributesFalse(x=1)
+
+
+def test_model_signature_annotated() -> None:
+    class Model(BaseModel):
+        x: Annotated[int, 123]
+
+    # we used to accidentally convert `__metadata__` to a list
+    # which caused things like `typing.get_args()` to fail
+    assert Model.__signature__.parameters['x'].annotation.__metadata__ == (123,)

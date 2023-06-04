@@ -106,7 +106,6 @@ nav:
 - API Documentation:
   - 'pydantic': api/main.md
   - 'pydantic.alias_generators': api/alias_generators.md
-  - 'pydantic.type_adapter': api/type_adapter.md
   - 'pydantic.color': api/color.md
   - 'pydantic.config': api/config.md
   - 'pydantic.dataclasses': api/dataclasses.md
@@ -117,6 +116,7 @@ nav:
   - 'pydantic.json_schema': api/json_schema.md
   - 'pydantic.mypy': api/mypy.md
   - 'pydantic.networks': api/networks.md
+  - 'pydantic.type_adapter': api/type_adapter.md
   - 'pydantic.types': api/types.md
   - 'pydantic.validate_call': api/validate_call.md
   - 'pydantic.version': api/version.md

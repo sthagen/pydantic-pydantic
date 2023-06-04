@@ -1,4 +1,5 @@
-from typing import Optional, Tuple
+import platform
+from typing import Generic, Optional, Tuple, TypeVar
 
 import pytest
 
@@ -66,6 +67,16 @@ def test_create_model_pickle(create_module):
         assert m2 is not m
 
 
+def test_create_model_multi_inheritance():
+    class Mixin:
+        pass
+
+    Generic_T = Generic[TypeVar('T')]
+    FooModel = create_model('FooModel', value=(int, ...), __base__=(BaseModel, Generic_T))
+
+    assert FooModel.__orig_bases__ == (BaseModel, Generic_T)
+
+
 def test_invalid_name():
     with pytest.warns(RuntimeWarning):
         model = create_model('FooModel', _foo=(str, ...))
@@ -88,6 +99,12 @@ def test_inheritance():
         y: int = 2
 
     model = create_model('FooModel', foo=(str, ...), bar=(int, 123), __base__=BarModel)
+    assert model.model_fields.keys() == {'foo', 'bar', 'x', 'y'}
+    m = model(foo='a', x=4)
+    assert m.model_dump() == {'bar': 123, 'foo': 'a', 'x': 4, 'y': 2}
+
+    # bases as a tuple
+    model = create_model('FooModel', foo=(str, ...), bar=(int, 123), __base__=(BarModel,))
     assert model.model_fields.keys() == {'foo', 'bar', 'x', 'y'}
     m = model(foo='a', x=4)
     assert m.model_dump() == {'bar': 123, 'foo': 'a', 'x': 4, 'y': 2}
@@ -346,6 +363,22 @@ def test_private_attr_set_name():
     assert m._private_attr_2._owner_attr_name == 'Model._private_attr_2'
 
 
+def test_private_attr_default_descriptor_attribute_error():
+    class SetNameInt(int):
+        def __get__(self, obj, cls):
+            return self
+
+    _private_attr_default = SetNameInt(1)
+
+    class Model(BaseModel):
+        _private_attr: int = PrivateAttr(default=_private_attr_default)
+
+    assert Model.__private_attributes__['_private_attr'].__get__(None, Model) == _private_attr_default
+
+    with pytest.raises(AttributeError, match="'ModelPrivateAttr' object has no attribute 'some_attr'"):
+        Model.__private_attributes__['_private_attr'].some_attr
+
+
 def test_private_attr_set_name_do_not_crash_if_not_callable():
     class SetNameInt(int):
         __set_name__ = None
@@ -358,6 +391,72 @@ def test_private_attr_set_name_do_not_crash_if_not_callable():
     # Checks below are just to ensure that everything is the same as in `test_private_attr_set_name`
     # The main check is that model class definition above doesn't crash
     assert Model()._private_attr == 2
+
+
+def test_del_model_attr():
+    class Model(BaseModel):
+        some_field: str
+
+    m = Model(some_field='value')
+    assert hasattr(m, 'some_field')
+
+    del m.some_field
+
+    assert not hasattr(m, 'some_field')
+
+
+@pytest.mark.skipif(
+    platform.python_implementation() == 'PyPy' and platform.python_version_tuple() < ('3', '8'),
+    reason='In this single case `del` behaves weird on pypy 3.7',
+)
+def test_del_model_attr_error():
+    class Model(BaseModel):
+        some_field: str
+
+    m = Model(some_field='value')
+    assert not hasattr(m, 'other_field')
+
+    with pytest.raises(AttributeError, match='other_field'):
+        del m.other_field
+
+
+def test_del_model_attr_with_privat_attrs():
+    class Model(BaseModel):
+        _private_attr: int = PrivateAttr(default=1)
+        some_field: str
+
+    m = Model(some_field='value')
+    assert hasattr(m, 'some_field')
+
+    del m.some_field
+
+    assert not hasattr(m, 'some_field')
+
+
+def test_del_model_attr_with_privat_attrs_error():
+    class Model(BaseModel):
+        _private_attr: int = PrivateAttr(default=1)
+        some_field: str
+
+    m = Model(some_field='value')
+    assert not hasattr(m, 'other_field')
+
+    with pytest.raises(AttributeError, match="'Model' object has no attribute 'other_field'"):
+        del m.other_field
+
+
+def test_del_model_attr_with_privat_attrs_twice_error():
+    class Model(BaseModel):
+        _private_attr: int = 1
+        some_field: str
+
+    m = Model(some_field='value')
+    assert hasattr(m, '_private_attr')
+
+    del m._private_attr
+
+    with pytest.raises(AttributeError, match="'Model' object has no attribute '_private_attr'"):
+        del m._private_attr
 
 
 def test_create_model_with_slots():

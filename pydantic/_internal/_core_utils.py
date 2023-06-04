@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Any, Callable, Iterable, TypeVar, Union, cast
 
 from pydantic_core import CoreSchema, core_schema
-from typing_extensions import TypeGuard, get_args
+from typing_extensions import TypeAliasType, TypeGuard, get_args
 
 from . import _repr
 
@@ -81,8 +81,11 @@ def get_type_ref(type_: type[Any], args_override: tuple[type[Any], ...] | None =
         args = generic_metadata['args'] or args
 
     module_name = getattr(origin, '__module__', '<No __module__>')
-    qualname = getattr(origin, '__qualname__', f'<No __qualname__: {origin}>')
-    type_ref = f'{module_name}.{qualname}:{id(origin)}'
+    if isinstance(origin, TypeAliasType):
+        type_ref = f'{module_name}.{origin.__name__}'
+    else:
+        qualname = getattr(origin, '__qualname__', f'<No __qualname__: {origin}>')
+        type_ref = f'{module_name}.{qualname}:{id(origin)}'
 
     arg_refs: list[str] = []
     for arg in args:
@@ -247,8 +250,8 @@ class _WalkCoreSchema:
         return f(schema.copy(), self._walk)
 
     def _walk(self, schema: core_schema.CoreSchema, f: Walk) -> core_schema.CoreSchema:
-        ser_schema: core_schema.SerSchema | None = schema.get('serialization', None)  # type: ignore
         schema = self._schema_type_to_method[schema['type']](schema, f)
+        ser_schema: core_schema.SerSchema | None = schema.get('serialization', None)  # type: ignore
         if ser_schema:
             schema['serialization'] = self._handle_ser_schemas(ser_schema.copy(), f)
         return schema
@@ -363,6 +366,13 @@ class _WalkCoreSchema:
         if 'extra_validator' in schema:
             schema['extra_validator'] = self.walk(schema['extra_validator'], f)
         replaced_fields: dict[str, core_schema.ModelField] = {}
+        replaced_computed_fields: list[core_schema.ComputedField] = []
+        for computed_field in schema.get('computed_fields', None) or ():
+            replaced_field = computed_field.copy()
+            replaced_field['return_schema'] = self.walk(computed_field['return_schema'], f)
+            replaced_computed_fields.append(replaced_field)
+        if replaced_computed_fields:
+            schema['computed_fields'] = replaced_computed_fields
         for k, v in schema['fields'].items():
             replaced_field = v.copy()
             replaced_field['schema'] = self.walk(v['schema'], f)
@@ -373,6 +383,13 @@ class _WalkCoreSchema:
     def handle_typed_dict_schema(self, schema: core_schema.TypedDictSchema, f: Walk) -> core_schema.CoreSchema:
         if 'extra_validator' in schema:
             schema['extra_validator'] = self.walk(schema['extra_validator'], f)
+        replaced_computed_fields: list[core_schema.ComputedField] = []
+        for computed_field in schema.get('computed_fields', None) or ():
+            replaced_field = computed_field.copy()
+            replaced_field['return_schema'] = self.walk(computed_field['return_schema'], f)
+            replaced_computed_fields.append(replaced_field)
+        if replaced_computed_fields:
+            schema['computed_fields'] = replaced_computed_fields
         replaced_fields: dict[str, core_schema.TypedDictField] = {}
         for k, v in schema['fields'].items():
             replaced_field = v.copy()
@@ -383,6 +400,13 @@ class _WalkCoreSchema:
 
     def handle_dataclass_args_schema(self, schema: core_schema.DataclassArgsSchema, f: Walk) -> core_schema.CoreSchema:
         replaced_fields: list[core_schema.DataclassField] = []
+        replaced_computed_fields: list[core_schema.ComputedField] = []
+        for computed_field in schema.get('computed_fields', None) or ():
+            replaced_field = computed_field.copy()
+            replaced_field['return_schema'] = self.walk(computed_field['return_schema'], f)
+            replaced_computed_fields.append(replaced_field)
+        if replaced_computed_fields:
+            schema['computed_fields'] = replaced_computed_fields
         for field in schema['fields']:
             replaced_field = field.copy()
             replaced_field['schema'] = self.walk(field['schema'], f)

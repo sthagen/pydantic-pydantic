@@ -2,10 +2,14 @@
 from __future__ import annotations as _annotations
 
 import sys
+from dataclasses import is_dataclass
 from typing import TYPE_CHECKING, Any, Dict, Generic, Iterable, Set, TypeVar, Union, overload
 
-from pydantic_core import CoreSchema, SchemaSerializer, SchemaValidator
-from typing_extensions import Literal
+from pydantic_core import CoreSchema, SchemaSerializer, SchemaValidator, Some
+from typing_extensions import Literal, is_typeddict
+
+from pydantic.errors import PydanticUserError
+from pydantic.main import BaseModel
 
 from ._internal import _config, _core_utils, _generate_schema, _typing_extra
 from .config import ConfigDict
@@ -117,15 +121,30 @@ class TypeAdapter(Generic[T]):
         def __new__(cls, __type: Any, *, config: ConfigDict | None = ...) -> TypeAdapter[T]:
             raise NotImplementedError
 
-    def __init__(self, __type: Any, *, config: ConfigDict | None = None, _parent_depth: int = 2) -> None:
+    def __init__(self, type: Any, *, config: ConfigDict | None = None, _parent_depth: int = 2) -> None:
         """Initializes the TypeAdapter object."""
         config_wrapper = _config.ConfigWrapper(config)
 
+        try:
+            type_has_config = issubclass(type, BaseModel) or is_dataclass(type) or is_typeddict(type)
+        except TypeError:
+            # type is not a class
+            type_has_config = False
+
+        if type_has_config and config is not None:
+            raise PydanticUserError(
+                'Cannot use `config` when the type is a BaseModel, dataclass or TypedDict.'
+                ' These types can have their own config and setting the config via the `config`'
+                ' parameter to TypeAdapter will not override it, thus the `config` you passed to'
+                ' TypeAdapter becomes meaningless, which is probably not what you want.',
+                code='type-adapter-config-unused',
+            )
+
         core_schema: CoreSchema
         try:
-            core_schema = _getattr_no_parents(__type, '__pydantic_core_schema__')
+            core_schema = _getattr_no_parents(type, '__pydantic_core_schema__')
         except AttributeError:
-            core_schema = _get_schema(__type, config_wrapper, parent_depth=_parent_depth + 1)
+            core_schema = _get_schema(type, config_wrapper, parent_depth=_parent_depth + 1)
 
         core_schema = _core_utils.flatten_schema_defs(core_schema)
         simplified_core_schema = _core_utils.inline_schema_defs(core_schema)
@@ -133,13 +152,13 @@ class TypeAdapter(Generic[T]):
         core_config = config_wrapper.core_config(None)
         validator: SchemaValidator
         try:
-            validator = _getattr_no_parents(__type, '__pydantic_validator__')
+            validator = _getattr_no_parents(type, '__pydantic_validator__')
         except AttributeError:
             validator = SchemaValidator(simplified_core_schema, core_config)
 
         serializer: SchemaSerializer
         try:
-            serializer = _getattr_no_parents(__type, '__pydantic_serializer__')
+            serializer = _getattr_no_parents(type, '__pydantic_serializer__')
         except AttributeError:
             serializer = SchemaSerializer(simplified_core_schema, core_config)
 
@@ -147,20 +166,28 @@ class TypeAdapter(Generic[T]):
         self.validator = validator
         self.serializer = serializer
 
-    def validate_python(self, __object: Any, *, strict: bool | None = None, context: dict[str, Any] | None = None) -> T:
+    def validate_python(
+        self,
+        __object: Any,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> T:
         """
         Validate a Python object against the model.
 
         Args:
             __object (Any): The Python object to validate against the model.
             strict (bool | None, optional): Whether to strictly check types. Defaults to None.
+            from_attributes (bool | None, optional): Whether to extract data from object attributes. Defaults to None.
             context (dict[str, Any] | None, optional): Additional context to use during validation. Defaults to None.
 
         Returns:
             T: The validated object.
 
         """
-        return self.validator.validate_python(__object, strict=strict, context=context)
+        return self.validator.validate_python(__object, strict=strict, from_attributes=from_attributes, context=context)
 
     def validate_json(
         self, __data: str | bytes, *, strict: bool | None = None, context: dict[str, Any] | None = None
@@ -177,6 +204,18 @@ class TypeAdapter(Generic[T]):
 
         """
         return self.validator.validate_json(__data, strict=strict, context=context)
+
+    def get_default_value(self, *, strict: bool | None = None, context: dict[str, Any] | None = None) -> Some[T] | None:
+        """Get the default value for this model / type.
+
+        Args:
+            strict (bool | None, optional): Whether to strictly check types. Defaults to None.
+            context (dict[str, Any] | None, optional): Additional context to use during validation. Defaults to None.
+
+        Returns:
+            Some[T] | None: The default value wrapped in a Some if there is one or None if not.
+        """
+        return self.validator.get_default_value(strict=strict, context=context)
 
     def dump_python(
         self,

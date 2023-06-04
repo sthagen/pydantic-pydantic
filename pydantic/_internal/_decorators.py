@@ -3,18 +3,21 @@ Logic related to validators applied to models etc. via the `@field_validator` an
 """
 from __future__ import annotations as _annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from functools import partial, partialmethod
 from inspect import Parameter, Signature, isdatadescriptor, ismethoddescriptor, signature
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar, Union, cast
+from itertools import islice
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Iterable, TypeVar, Union
 
 from pydantic_core import core_schema
-from typing_extensions import Literal, TypeAlias
+from typing_extensions import Literal, TypeAlias, is_typeddict
 
 from ..errors import PydanticUserError
 from ..fields import ComputedFieldInfo
 from ._core_utils import get_type_ref
 from ._internal_dataclass import slots_dataclass
+from ._typing_extra import get_function_type_hints
 
 if TYPE_CHECKING:
     from ..functional_validators import FieldValidatorModes
@@ -77,7 +80,7 @@ class FieldSerializerDecoratorInfo:
     decorator_repr: ClassVar[str] = '@field_serializer'
     fields: tuple[str, ...]
     mode: Literal['plain', 'wrap']
-    json_return_type: core_schema.JsonReturnTypes | None
+    return_type: Any
     when_used: core_schema.WhenUsed
     check_fields: bool | None
 
@@ -91,7 +94,8 @@ class ModelSerializerDecoratorInfo:
 
     decorator_repr: ClassVar[str] = '@model_serializer'
     mode: Literal['plain', 'wrap']
-    json_return_type: core_schema.JsonReturnTypes | None
+    return_type: Any
+    when_used: core_schema.WhenUsed
 
 
 @slots_dataclass
@@ -188,7 +192,7 @@ class Decorator(Generic[DecoratorInfoType]):
         shim: Callable[[Any], Any] | None,
         info: DecoratorInfoType,
     ) -> Decorator[DecoratorInfoType]:
-        func = getattr(cls_, cls_var_name)
+        func = get_attribute_from_bases(cls_, cls_var_name)
         if shim is not None:
             func = shim(func)
         return Decorator(
@@ -206,6 +210,90 @@ class Decorator(Generic[DecoratorInfoType]):
             shim=self.shim,
             info=self.info,
         )
+
+
+def get_bases(tp: type[Any]) -> tuple[type[Any], ...]:
+    if is_typeddict(tp):
+        return tp.__orig_bases__  # type: ignore
+    try:
+        return tp.__bases__
+    except AttributeError:
+        return ()
+
+
+def mro(tp: type[Any]) -> tuple[type[Any], ...]:
+    """
+    Calculate the Method Resolution Order of bases using the C3 algorithm.
+
+    See https://www.python.org/download/releases/2.3/mro/
+    """
+
+    # try to use the existing mro, for performance mainly
+    # but also because it helps verify the implementation below
+    if not is_typeddict(tp):
+        try:
+            return tp.__mro__
+        except AttributeError:
+            # GenericAlias and some other cases
+            pass
+
+    def merge_seqs(seqs: list[deque[type[Any]]]) -> Iterable[type[Any]]:
+        while True:
+            non_empty = [seq for seq in seqs if seq]
+            if not non_empty:
+                # Nothing left to process, we're done.
+                return
+            candidate: type[Any] | None = None
+            for seq in non_empty:  # Find merge candidates among seq heads.
+                candidate = seq[0]
+                not_head = [s for s in non_empty if candidate in islice(s, 1, None)]
+                if not_head:
+                    # Reject the candidate.
+                    candidate = None
+                else:
+                    break
+            if not candidate:
+                raise TypeError('Inconsistent hierarchy, no C3 MRO is possible')
+            yield candidate
+            for seq in non_empty:
+                # Remove candidate.
+                if seq[0] == candidate:
+                    seq.popleft()
+
+    bases = get_bases(tp)
+    seqs = [deque(mro(base)) for base in bases] + [deque(bases)]
+    res = tuple(merge_seqs(seqs))
+
+    return (tp,) + res
+
+
+def get_attribute_from_bases(tp: type[Any], name: str) -> Any:
+    """
+    Get the attribute from the next class in the MRO that has it,
+    aiming to simulate calling the method on the actual class.
+
+    The reason for iterating over the mro instead of just getting
+    the attribute (which would do that for us) is to support TypedDict,
+    which lacks a real __mro__, but can have a virtual one constructed
+    from its bases (as done here).
+
+    Args:
+        tp (type[Any]): The type or class to search for the attribute.
+        name (str): The name of the attribute to retrieve.
+
+    Returns:
+        Any: The attribute value, if found.
+
+    Raises:
+        AttributeError: If the attribute is not found in any class in the MRO.
+    """
+    try:
+        return getattr(tp, name)
+    except Exception as e:
+        for base in reversed(mro(tp)):
+            if hasattr(base, name):
+                return getattr(base, name)
+        raise e
 
 
 @slots_dataclass
@@ -239,8 +327,8 @@ class DecoratorInfos:
 
         # reminder: dicts are ordered and replacement does not alter the order
         res = DecoratorInfos()
-        for base in model_dc.__bases__[::-1]:
-            existing = cast(Union[DecoratorInfos, None], base.__dict__.get('__pydantic_decorators__'))
+        for base in reversed(mro(model_dc)[1:]):
+            existing: DecoratorInfos | None = base.__dict__.get('__pydantic_decorators__')
             if existing is None:
                 existing = DecoratorInfos.build(base)
             res.validators.update({k: v.bind_to_cls(model_dc) for k, v in existing.validators.items()})
@@ -250,6 +338,8 @@ class DecoratorInfos:
             res.model_serializers.update({k: v.bind_to_cls(model_dc) for k, v in existing.model_serializers.items()})
             res.model_validators.update({k: v.bind_to_cls(model_dc) for k, v in existing.model_validators.items()})
             res.computed_fields.update({k: v.bind_to_cls(model_dc) for k, v in existing.computed_fields.items()})
+
+        to_replace: list[tuple[str, Any]] = []
 
         for var_name, var_value in vars(model_dc).items():
             if isinstance(var_value, PydanticDescriptorProxy):
@@ -297,7 +387,15 @@ class DecoratorInfos:
                     res.computed_fields[var_name] = Decorator.build(
                         model_dc, cls_var_name=var_name, shim=None, info=info
                     )
-                setattr(model_dc, var_name, var_value.wrapped)
+                to_replace.append((var_name, var_value.wrapped))
+        if to_replace:
+            # If we can save `__pydantic_decorators__` on the class we'll be able to check for it above
+            # so then we don't need to re-process the type, which means we can discard our descriptor wrappers
+            # and replace them with the thing they are wrapping (see the other setattr call below)
+            # which allows validator class methods to also function as regular class methods
+            setattr(model_dc, '__pydantic_decorators__', res)
+            for name, value in to_replace:
+                setattr(model_dc, name, value)
         return res
 
 
@@ -489,26 +587,17 @@ def unwrap_wrapped_function(
     Returns:
         The underlying function of the wrapped function.
     """
-    all: list[Any]
+    all: set[Any] = {partial, partialmethod, property}
+
     try:
         from functools import cached_property  # type: ignore
-
-        cached_property_list = [cached_property]
     except ImportError:
-        cached_property = int  # anything that doesn't match isinstance below
-        cached_property_list = []
+        cached_property = type('', (), {})  # type: ignore
+    else:
+        all.add(cached_property)
 
     if unwrap_class_static_method:
-        all = [
-            staticmethod,
-            classmethod,
-            partial,
-            partialmethod,
-            property,
-            *cached_property_list,
-        ]
-    else:
-        all = [partial, partialmethod, property, *cached_property_list]
+        all.update({staticmethod, classmethod})
 
     while isinstance(func, tuple(all)):
         if unwrap_class_static_method and isinstance(func, (classmethod, staticmethod)):
@@ -517,10 +606,22 @@ def unwrap_wrapped_function(
             func = func.func
         elif isinstance(func, property):
             func = func.fget  # arbitrary choice, convenient for computed fields
-        elif isinstance(func, cached_property):
-            func = func.func  # type: ignore # same reasoning as above
+        else:
+            # Make coverage happy as it can only get here in the last possible case
+            assert isinstance(func, cached_property)
+            func = func.func  # type: ignore
 
     return func
+
+
+def get_function_return_type(func: Any, explicit_return_type: Any) -> Any:
+    if explicit_return_type is None:
+        # try to get it from the type annotation
+        func = unwrap_wrapped_function(func)
+        hints = get_function_type_hints(unwrap_wrapped_function(func), include_keys={'return'})
+        return hints.get('return', None)
+    else:
+        return explicit_return_type
 
 
 def count_positional_params(sig: Signature) -> int:

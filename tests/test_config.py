@@ -471,7 +471,7 @@ def test_invalid_extra():
     with pytest.raises(SchemaError, match=extra_error):
         create_model('MyCreatedModel', __config__=config_dict)
 
-    with pytest.raises(SchemaError, match='Invalid extra_behavior: `invalid-value`'):
+    with pytest.raises(SchemaError, match=extra_error):
 
         @pydantic_dataclass(config=config_dict)
         class MyDataclass:
@@ -603,3 +603,22 @@ def test_config_inf_nan_disabled(inf_nan_capable_type, inf_nan_value):
             'type': 'finite_number',
         }
     )
+
+
+@pytest.mark.parametrize(
+    'config,expected',
+    (
+        (ConfigDict(), 'ConfigWrapper()'),
+        (ConfigDict(title='test'), "ConfigWrapper(title='test')"),
+    ),
+)
+def test_config_wrapper_repr(config, expected):
+    assert repr(ConfigWrapper(config=config)) == expected
+
+
+def test_config_wrapper_get_item():
+    config_wrapper = ConfigWrapper(config=ConfigDict(title='test'))
+
+    assert config_wrapper.title == 'test'
+    with pytest.raises(AttributeError, match="Config has no attribute 'test'"):
+        config_wrapper.test
