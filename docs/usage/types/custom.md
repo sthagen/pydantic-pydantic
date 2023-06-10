@@ -85,17 +85,17 @@ print(model.post_code)
 print(Model.model_json_schema())
 """
 {
-    'type': 'object',
     'properties': {
         'post_code': {
-            'type': 'string',
-            'pattern': '^[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}$',
             'examples': ['SP11 9DG', 'W1J 7BU'],
+            'pattern': '^[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}$',
             'title': 'Post Code',
+            'type': 'string',
         }
     },
     'required': ['post_code'],
     'title': 'Model',
+    'type': 'object',
 }
 """
 try:
@@ -117,7 +117,7 @@ except ValidationError as e:
 Similar validation could be achieved using [`constr(regex=...)`](#constrained-types) except the value won't be
 formatted with a space, the schema would just include the full pattern and the returned value would be a vanilla string.
 
-See [schema](../schema.md) for more details on how the model's schema is generated.
+See [schema](../json_schema.md) for more details on how the model's schema is generated.
 
 ### Arbitrary Types Allowed
 
