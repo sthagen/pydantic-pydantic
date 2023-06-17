@@ -12,6 +12,7 @@ from warnings import warn
 
 import annotated_types
 import typing_extensions
+from typing_extensions import Unpack
 
 from . import types
 from ._internal import _decorators, _fields, _generics, _internal_dataclass, _repr, _typing_extra, _utils
@@ -157,7 +158,7 @@ class FieldInfo(_repr.Representation):
         'decimal_places': None,
     }
 
-    def __init__(self, **kwargs: typing_extensions.Unpack[_FieldInfoInputs]) -> None:
+    def __init__(self, **kwargs: Unpack[_FieldInfoInputs]) -> None:
         """This class should generally not be initialized directly; instead, use the `pydantic.fields.Field` function
         or one of the constructor classmethods.
 
@@ -199,9 +200,7 @@ class FieldInfo(_repr.Representation):
         self.metadata = self._collect_metadata(kwargs) + annotation_metadata  # type: ignore
 
     @classmethod
-    def from_field(
-        cls, default: Any = _Undefined, **kwargs: typing_extensions.Unpack[_FromFieldInfoInputs]
-    ) -> typing_extensions.Self:
+    def from_field(cls, default: Any = _Undefined, **kwargs: Unpack[_FromFieldInfoInputs]) -> typing_extensions.Self:
         """Create a new `FieldInfo` object with the `Field` function.
 
         Args:
@@ -614,7 +613,7 @@ def Field(  # C901
     decimal_places: int | None = None,
     min_length: int | None = None,
     max_length: int | None = None,
-    **extra: typing_extensions.Unpack[_EmptyKwargs],
+    **extra: Unpack[_EmptyKwargs],
 ) -> Any:
     """Create a field for objects that can be configured.
 
@@ -640,7 +639,7 @@ def Field(  # C901
         frozen: Whether the field is frozen.
         final: Whether the field is final.
         validate_default: Run validation that isn't only checking existence of defaults. `True` by default.
-        repr: If `True` (the default), return a string representation of the field.
+        repr: A boolean indicating whether to include the field in the `__repr__` output.
         init_var: Whether the field should be included in the constructor of the dataclass.
         kw_only: Whether the field should be a keyword-only argument in the constructor of the dataclass.
         strict: If `True` (the default is `None`), the field should be validated strictly.
@@ -655,6 +654,10 @@ def Field(  # C901
         allow_inf_nan: Allow `inf`, `-inf`, `nan`. Only applicable to numbers.
         max_digits: Maximum number of allow digits for strings.
         decimal_places: Maximum number of decimal places allowed for numbers.
+        extra: Include extra fields used by the JSON schema.
+
+            !!! warning Deprecated
+                The `extra` kwargs is deprecated. Use `json_schema_extra` instead.
 
     Returns:
         The generated `FieldInfo` object
@@ -662,7 +665,7 @@ def Field(  # C901
     # Check deprecated and removed params from V1. This logic should eventually be removed.
     const = extra.pop('const', None)  # type: ignore
     if const is not None:
-        raise PydanticUserError('`const` is removed, use `Literal` instead', code='deprecated-kwargs')
+        raise PydanticUserError('`const` is removed, use `Literal` instead', code='removed-kwargs')
 
     min_items = extra.pop('min_items', None)  # type: ignore
     if min_items is not None:
@@ -683,7 +686,7 @@ def Field(  # C901
                 '`unique_items` is removed, use `Set` instead'
                 '(this feature is discussed in https://github.com/pydantic/pydantic-core/issues/296)'
             ),
-            code='deprecated-kwargs',
+            code='removed-kwargs',
         )
 
     allow_mutation = extra.pop('allow_mutation', None)  # type: ignore
@@ -694,7 +697,7 @@ def Field(  # C901
 
     regex = extra.pop('regex', None)  # type: ignore
     if regex is not None:
-        raise PydanticUserError('`regex` is removed. use `pattern` instead', code='deprecated-kwargs')
+        raise PydanticUserError('`regex` is removed. use `pattern` instead', code='removed-kwargs')
 
     if extra:
         warn(
@@ -807,7 +810,7 @@ def PrivateAttr(
 
     Private attributes are not checked by Pydantic, so it's up to you to maintain their accuracy.
 
-    Private attributes are stored in the model `__slots__`.
+    Private attributes are stored in `__private_attributes__` on the model.
 
     Args:
         default: The attribute's default value. Defaults to Undefined.
@@ -888,7 +891,7 @@ def computed_field(
     repr: bool = True,
     return_type: Any = None,
 ) -> PropertyT | typing.Callable[[PropertyT], PropertyT]:
-    """Decorate to include `property` and `cached_property` when serialising models.
+    """Decorate to include `property` and `cached_property` when serializing models.
 
     If applied to functions not yet decorated with `@property` or `@cached_property`, the function is
     automatically wrapped with `property`.
@@ -901,7 +904,7 @@ def computed_field(
         description: Description to used when including this computed field in JSON Schema, defaults to the functions
             docstring, currently unused waiting for #4697
         repr: whether to include this computed field in model repr
-        return_type: optional return for serialization logic to expect when serialising to JSON, if included
+        return_type: optional return for serialization logic to expect when serializing to JSON, if included
             this must be correct, otherwise a `TypeError` is raised.
             If you don't include a return type Any is used, which does runtime introspection to handle arbitrary
             objects.

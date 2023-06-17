@@ -1,3 +1,4 @@
+"""This module contains related classes and functions for serialization."""
 from __future__ import annotations
 
 from functools import partialmethod
@@ -5,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, TypeVar, Union, overload
 
 from pydantic_core import core_schema
 from pydantic_core import core_schema as _core_schema
-from typing_extensions import Literal, TypeAlias
+from typing_extensions import Annotated, Literal, TypeAlias
 
 from ._internal import _annotated_handlers, _decorators, _internal_dataclass
 
@@ -56,8 +57,8 @@ class WrapSerializer:
 
     Attributes:
         func: The function to be wrapped.
-        return_type: Optional return type for the function, if omitted it will be inferred from the type annotation.
-        when_used: Determines the serializer will be used for serialization. Accepts a string with values `'always'`,
+        return_type: The return type for the function, if omitted it will be inferred from the type annotation.
+        when_used: Determines when this serializer should be used. Accepts a string with values `'always'`,
             `'unless-none'`, `'json'`, and `'json-unless-none'`. Defaults to 'always'.
     """
 
@@ -203,15 +204,14 @@ def model_serializer(
 ) -> Callable[[Any], Any]:
     """Decorate a function which will be called to serialize the model.
 
-    (`when_used` is not permitted here since it makes no sense.)
-
     Args:
         __f: The function to be decorated.
         mode: The serialization mode. `'plain'` means the function will be called
             instead of the default serialization logic, `'wrap'` means the function will be called with an argument
             to optionally call the default serialization logic.
-        when_used: Determines the serializer will be be used for serialization.
-        return_type: Optional return type for the function, if omitted it will be inferred from the type annotation.
+        when_used: Determines when this serializer should be used. Accepts a string with values `'always'`,
+            `'unless-none'`, `'json'`, `'json-unless-none'`. Defaults to `'always'`.
+        return_type: The return type for the function, if omitted it will be inferred from the type annotation.
 
     Returns:
         A decorator that can be used to decorate a function to be used as a model serializer.
@@ -227,3 +227,34 @@ def model_serializer(
         return dec
     else:
         return dec(__f)  # type: ignore
+
+
+AnyType = TypeVar('AnyType')
+
+
+if TYPE_CHECKING:
+    SerializeAsAny = Annotated[AnyType, ...]  # SerializeAsAny[list[str]] will be treated by type checkers as list[str]
+    """Force serialization to ignore whatever is defined in the schema and instead ask the object
+    itself how it should be serialized.
+    In particular, this means that when model subclasses are serialized, fields present in the subclass
+    but not in the original schema will be included.
+    """
+else:
+
+    @_internal_dataclass.slots_dataclass
+    class SerializeAsAny:  # noqa: D101
+        def __class_getitem__(cls, item: Any) -> Any:
+            return Annotated[item, SerializeAsAny()]
+
+        def __get_pydantic_core_schema__(
+            self, source_type: Any, handler: _annotated_handlers.GetCoreSchemaHandler
+        ) -> core_schema.CoreSchema:
+            schema = handler(source_type)
+            schema_to_update = schema
+            while schema_to_update['type'] == 'definitions':
+                schema_to_update = schema_to_update.copy()
+                schema_to_update = schema_to_update['schema']
+            schema_to_update['serialization'] = core_schema.wrap_serializer_function_ser_schema(
+                lambda x, h: h(x), schema=core_schema.any_schema()
+            )
+            return schema

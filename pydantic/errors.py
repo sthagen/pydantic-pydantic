@@ -14,6 +14,7 @@ __all__ = (
     'PydanticImportError',
     'PydanticSchemaGenerationError',
     'PydanticInvalidForJsonSchema',
+    'PydanticErrorCodes',
 )
 
 # We use this URL to allow for future flexibility about how we host the docs, while allowing for Pydantic
@@ -32,7 +33,7 @@ PydanticErrorCodes = Literal[
     'model-field-overridden',
     'model-field-missing-annotation',
     'config-both',
-    'deprecated-kwargs',
+    'removed-kwargs',
     'invalid-for-json-schema',
     'json-schema-already-used',
     'base-model-instantiated',
