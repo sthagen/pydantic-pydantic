@@ -1,3 +1,5 @@
+"""This module contains related classes and functions for validation."""
+
 from __future__ import annotations as _annotations
 
 import sys
@@ -93,14 +95,13 @@ class BeforeValidator:
 
         from pydantic import BaseModel, BeforeValidator
 
-
         MyInt = Annotated[int, BeforeValidator(lambda v: v + 1)]
 
         class Model(BaseModel):
             a: MyInt
 
         print(Model(a=1).a)
-        # > 2
+        #> 2
 
         try:
             Model(a='a')
@@ -134,14 +135,13 @@ class PlainValidator:
 
         from pydantic import BaseModel, PlainValidator
 
-
         MyInt = Annotated[int, PlainValidator(lambda v: int(v) + 1)]
 
         class Model(BaseModel):
             a: MyInt
 
         print(Model(a='1').a)
-        # > 2
+        #> 2
         ```
     """
 
@@ -168,9 +168,8 @@ class WrapValidator:
 
     from pydantic import BaseModel, ValidationError, WrapValidator
 
-
     def validate_timestamp(v, handler):
-        if v == "now":
+        if v == 'now':
             # we don't want to bother with further validation, just return the new value
             return datetime.now()
         try:
@@ -179,18 +178,15 @@ class WrapValidator:
             # validation failed, in this case we want to return a default value
             return datetime(2000, 1, 1)
 
-
     MyTimestamp = Annotated[datetime, WrapValidator(validate_timestamp)]
-
 
     class Model(BaseModel):
         a: MyTimestamp
 
-
-    print(Model(a="now").a)
-    # > 2023-01-22 23:10:00.000000
-    print(Model(a="invalid").a)
-    # > 2000-01-01 00:00:00.000000
+    print(Model(a='now').a)
+    #> 2032-01-02 03:04:05.000006
+    print(Model(a='invalid').a)
+    #> 2000-01-01 00:00:00
     ```
     """
 
@@ -331,12 +327,20 @@ _ModelTypeCo = TypeVar('_ModelTypeCo', covariant=True)
 
 
 class ModelWrapValidatorHandler(_core_schema.ValidatorFunctionWrapHandler, Protocol[_ModelTypeCo]):
-    def __call__(self, input_value: Any, outer_location: str | int | None = None) -> _ModelTypeCo:  # pragma: no cover
+    """@model_validator decorated function handler argument type. This is used when `mode='wrap'`."""
+
+    def __call__(  # noqa: D102
+        self, input_value: Any, outer_location: str | int | None = None
+    ) -> _ModelTypeCo:  # pragma: no cover
         ...
 
 
 class ModelWrapValidatorWithoutInfo(Protocol):
-    def __call__(
+    """A @model_validator decorated function signature.
+    This is used when `mode='wrap'` and the function does not have info argument.
+    """
+
+    def __call__(  # noqa: D102
         self,
         cls: type[_ModelType],
         # this can be a dict, a model instance
@@ -349,7 +353,9 @@ class ModelWrapValidatorWithoutInfo(Protocol):
 
 
 class ModelWrapValidator(Protocol):
-    def __call__(
+    """A @model_validator decorated function signature. This is used when `mode='wrap'`."""
+
+    def __call__(  # noqa: D102
         self,
         cls: type[_ModelType],
         # this can be a dict, a model instance
@@ -363,7 +369,11 @@ class ModelWrapValidator(Protocol):
 
 
 class ModelBeforeValidatorWithoutInfo(Protocol):
-    def __call__(
+    """A @model_validator decorated function signature.
+    This is used when `mode='before'` and the function does not have info argument.
+    """
+
+    def __call__(  # noqa: D102
         self,
         cls: Any,
         # this can be a dict, a model instance
@@ -375,7 +385,9 @@ class ModelBeforeValidatorWithoutInfo(Protocol):
 
 
 class ModelBeforeValidator(Protocol):
-    def __call__(
+    """A @model_validator decorated function signature. This is used when `mode='before'`."""
+
+    def __call__(  # noqa: D102
         self,
         cls: Any,
         # this can be a dict, a model instance
@@ -388,16 +400,22 @@ class ModelBeforeValidator(Protocol):
 
 
 class ModelAfterValidatorWithoutInfo(Protocol):
+    """A @model_validator decorated function signature. This is used when `mode='after'` and the function does not
+    have info argument.
+    """
+
     @staticmethod
-    def __call__(
+    def __call__(  # noqa: D102
         self: _ModelType,  # type: ignore
     ) -> _ModelType:
         ...
 
 
 class ModelAfterValidator(Protocol):
+    """A @model_validator decorated function signature. This is used when `mode='after'`."""
+
     @staticmethod
-    def __call__(
+    def __call__(  # noqa: D102
         self: _ModelType,  # type: ignore
         __info: _core_schema.ValidationInfo,
     ) -> _ModelType:

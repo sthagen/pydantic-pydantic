@@ -142,7 +142,7 @@ The following properties have been removed from or changed in `Field`:
   in the namespace of the parent `BaseModel` subclass is now deprecated.
 
 * The following config settings have been removed:
-    * `allow_mutation`.
+    * `allow_mutation` — this has been removed. You should be able to use [frozen](api/config.md#pydantic.config.ConfigDict) equivalently (inverse of current use).
     * `error_msg_templates`.
     * `fields` — this was the source of various bugs, so has been removed.
       You should be able to use `Annotated` on fields to modify them as desired.
@@ -574,6 +574,10 @@ Pydantic V1 that have changed in Pydantic V2, you can use a custom `schema_gener
 [`BaseSettings`](api/pydantic_settings.md#pydantic_settings.BaseSettings), the base object for Pydantic
 [settings management](usage/pydantic_settings.md), has been moved to a separate package,
 [`pydantic-settings`](https://github.com/pydantic/pydantic-settings).
+
+Also, the `parse_env_var` classmethod has been removed. So, you need to
+[customise settings sources](usage/pydantic_settings.md#customise-settings-sources)
+to have your own parsing function.
 
 ## Moved in Pydantic V2
 

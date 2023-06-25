@@ -161,10 +161,14 @@ def is_builtin_dataclass(_cls: type[Any]) -> TypeGuard[type[StandardDataclass]]:
 
     we check that
     - `_cls` is a dataclass
-    - `_cls` is not a processed pydantic dataclass (with a basemodel attached)
+    - `_cls` is not a processed pydantic dataclass (with a `BaseModel` attached)
     - `_cls` is not a pydantic dataclass inheriting directly from a stdlib dataclass
     e.g.
     ```py
+    import dataclasses
+
+    import pydantic.dataclasses
+
     @dataclasses.dataclass
     class A:
         x: int

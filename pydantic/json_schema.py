@@ -556,7 +556,21 @@ class GenerateJsonSchema:
         if len(expected) == 1:
             return {'const': expected[0]}
         else:
-            return {'enum': expected}
+            types = {type(e) for e in expected}
+            if types == {str}:
+                return {'enum': expected, 'type': 'string'}
+            elif types == {int}:
+                return {'enum': expected, 'type': 'integer'}
+            elif types == {float}:
+                return {'enum': expected, 'type': 'number'}
+            elif types == {bool}:
+                return {'enum': expected, 'type': 'boolean'}
+            elif types == {list}:
+                return {'enum': expected, 'type': 'array'}
+            # there is not None case because if it's mixed it hits the final `else`
+            # if it's a single Literal[None] then it becomes a `const` schema above
+            else:
+                return {'enum': expected}
 
     def is_instance_schema(self, schema: core_schema.IsInstanceSchema) -> JsonSchemaValue:
         """Returns a schema that checks if a value is an instance of a class, equivalent to Python's `isinstance`
@@ -889,8 +903,9 @@ class GenerateJsonSchema:
         return self.generate_inner(schema['json_schema'])
 
     def typed_dict_schema(self, schema: core_schema.TypedDictSchema) -> JsonSchemaValue:
+        total = schema.get('total', True)
         named_required_fields: list[tuple[str, bool, CoreSchemaField]] = [
-            (name, self.field_is_required(field), field)
+            (name, self.field_is_required(field, total), field)
             for name, field in schema['fields'].items()
             if self.field_is_present(field)
         ]
@@ -1039,7 +1054,7 @@ class GenerateJsonSchema:
 
     def model_fields_schema(self, schema: core_schema.ModelFieldsSchema) -> JsonSchemaValue:
         named_required_fields: list[tuple[str, bool, CoreSchemaField]] = [
-            (name, self.field_is_required(field), field)
+            (name, self.field_is_required(field, total=True), field)
             for name, field in schema['fields'].items()
             if self.field_is_present(field)
         ]
@@ -1064,16 +1079,24 @@ class GenerateJsonSchema:
             assert_never(self.mode)
 
     def field_is_required(
-        self, field: core_schema.ModelField | core_schema.DataclassField | core_schema.TypedDictField
+        self,
+        field: core_schema.ModelField | core_schema.DataclassField | core_schema.TypedDictField,
+        total: bool,
     ) -> bool:
         """Whether the field should be marked as required in the generated JSON schema.
         (Note that this is irrelevant if the field is not present in the JSON schema.).
+
+        Args:
+            field: The schema for the field itself.
+            total: Only applies to `TypedDictField`s.
+                Indicates if the `TypedDict` this field belongs to is total, in which case any fields that don't
+                explicitly specify `required=False` are required.
         """
         if self.mode == 'serialization':
             return not field.get('serialization_exclude')
         elif self.mode == 'validation':
             if field['type'] == 'typed-dict-field':
-                return field['required']  # type: ignore  # required is always populated
+                return field.get('required', total)
             else:
                 return field['schema']['type'] != 'default'
         else:
@@ -1081,7 +1104,7 @@ class GenerateJsonSchema:
 
     def dataclass_args_schema(self, schema: core_schema.DataclassArgsSchema) -> JsonSchemaValue:
         named_required_fields: list[tuple[str, bool, CoreSchemaField]] = [
-            (field['name'], self.field_is_required(field), field)
+            (field['name'], self.field_is_required(field, total=True), field)
             for field in schema['fields']
             if self.field_is_present(field)
         ]
@@ -1647,11 +1670,14 @@ def _make_json_hashable(value: _Json) -> _HashableJson:
         return value
 
 
-def _sort_json_schema(value: JsonSchemaValue) -> JsonSchemaValue:
+def _sort_json_schema(value: JsonSchemaValue, parent_key: str | None = None) -> JsonSchemaValue:
     if isinstance(value, dict):  # type: ignore
         sorted_dict: dict[str, JsonSchemaValue] = {}
-        for key in sorted(value.keys()):
-            sorted_dict[key] = _sort_json_schema(value[key])
+        keys = value.keys()
+        if parent_key != 'properties':
+            keys = sorted(keys)
+        for key in keys:
+            sorted_dict[key] = _sort_json_schema(value[key], parent_key=key)
         return sorted_dict  # type: ignore
     elif isinstance(value, list):  # type: ignore
         sorted_list: list[JsonSchemaValue] = []
