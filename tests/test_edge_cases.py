@@ -4,7 +4,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from decimal import Decimal
-from enum import Enum
+from enum import Enum, auto
 from typing import (
     Any,
     Dict,
@@ -24,11 +24,12 @@ from typing import (
 import pytest
 from dirty_equals import HasRepr, IsStr
 from pydantic_core import ErrorDetails, InitErrorDetails, PydanticSerializationError, core_schema
-from typing_extensions import Annotated, get_args
+from typing_extensions import Annotated, TypedDict, get_args
 
 from pydantic import (
     BaseModel,
     ConfigDict,
+    PydanticDeprecatedSince20,
     PydanticInvalidForJsonSchema,
     PydanticSchemaGenerationError,
     TypeAdapter,
@@ -432,7 +433,7 @@ def test_tuple_value_error():
         {
             'input': 'y',
             'loc': ('v', 1),
-            'msg': 'Input should be a valid number, unable to parse string as an number',
+            'msg': 'Input should be a valid number, unable to parse string as a number',
             'type': 'float_parsing',
         },
         {'input': 'x', 'loc': ('v', 2), 'msg': 'Input should be a valid decimal', 'type': 'decimal_parsing'},
@@ -458,8 +459,15 @@ def test_recursive_list():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=['x'])
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {'input': 'x', 'loc': ('v', 0), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
+        {
+            'type': 'model_type',
+            'loc': ('v', 0),
+            'msg': 'Input should be a valid dictionary or instance of SubModel',
+            'input': 'x',
+            'ctx': {'class_name': 'SubModel'},
+        }
     ]
 
 
@@ -1198,6 +1206,7 @@ def test_multiple_errors():
     with pytest.raises(ValidationError) as exc_info:
         Model(a='foobar')
 
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
             'type': 'int_parsing',
@@ -1208,15 +1217,12 @@ def test_multiple_errors():
         {
             'type': 'float_parsing',
             'loc': ('a', 'float'),
-            'msg': 'Input should be a valid number, unable to parse string as an number',
+            'msg': 'Input should be a valid number, unable to parse string as a number',
             'input': 'foobar',
         },
         {
             'type': 'decimal_parsing',
-            'loc': (
-                'a',
-                'lax-or-strict[lax=function-after[validate(), union[json-or-python[json=function-after[Decimal(), union[int,float,constrained-str]],python=is-instance[Decimal]],int,float,constrained-str]],strict=custom-error[function-after[validate(), json-or-python[json=function-after[Decimal(), union[int,float,constrained-str]],python=is-instance[Decimal]]]]]',  # noqa: E501
-            ),
+            'loc': ('a', 'function-after[validate(), any]'),
             'msg': 'Input should be a valid decimal',
             'input': 'foobar',
         },
@@ -2153,7 +2159,7 @@ def test_iter_coverage():
         y: str = 'a'
 
     with pytest.warns(
-        DeprecationWarning, match='The private method `_iter` will be removed and should no longer be used.'
+        PydanticDeprecatedSince20, match='The private method `_iter` will be removed and should no longer be used.'
     ):
         assert list(MyModel()._iter(by_alias=True)) == [('x', 1), ('y', 'a')]
 
@@ -2317,7 +2323,7 @@ def test_abstractmethod_missing_for_all_decorators(bases):
         def my_model_validator(cls, values, handler, info):
             raise NotImplementedError
 
-        with pytest.warns(DeprecationWarning):
+        with pytest.warns(PydanticDeprecatedSince20):
 
             @root_validator(skip_on_failure=True)
             @classmethod
@@ -2325,7 +2331,7 @@ def test_abstractmethod_missing_for_all_decorators(bases):
             def my_root_validator(cls, values):
                 raise NotImplementedError
 
-        with pytest.warns(DeprecationWarning):
+        with pytest.warns(PydanticDeprecatedSince20):
 
             @validator('side')
             @classmethod
@@ -2381,8 +2387,15 @@ def test_generic_wrapped_forwardref():
     Operation.model_validate({'callbacks': [PathItem()]})
     with pytest.raises(ValidationError) as exc_info:
         Operation.model_validate({'callbacks': [1]})
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {'input': 1, 'loc': ('callbacks', 0), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
+        {
+            'type': 'model_type',
+            'loc': ('callbacks', 0),
+            'msg': 'Input should be a valid dictionary or instance of PathItem',
+            'input': 1,
+            'ctx': {'class_name': 'PathItem'},
+        }
     ]
 
 
@@ -2396,8 +2409,15 @@ def test_plain_basemodel_field():
     assert Model(x=Model2()).x == Model2()
     with pytest.raises(ValidationError) as exc_info:
         Model(x=1)
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {'input': 1, 'loc': ('x',), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
+        {
+            'type': 'model_type',
+            'loc': ('x',),
+            'msg': 'Input should be a valid dictionary or instance of BaseModel',
+            'input': 1,
+            'ctx': {'class_name': 'BaseModel'},
+        }
     ]
 
 
@@ -2443,8 +2463,15 @@ def test_invalid_forward_ref_model():
     assert A(B=B()).B == B()
     with pytest.raises(ValidationError) as exc_info:
         A(B=C())
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {'input': C(), 'loc': ('B',), 'msg': 'Input should be a valid dictionary', 'type': 'dict_type'}
+        {
+            'type': 'model_type',
+            'loc': ('B',),
+            'msg': 'Input should be a valid dictionary or instance of B',
+            'input': C(),
+            'ctx': {'class_name': 'B'},
+        }
     ]
 
 
@@ -2491,3 +2518,16 @@ def test_sequences_str(sequence_type, input_data, expected_error_type, expected_
         Model(str_sequence=input_data)
 
     assert e.value.errors(include_url=False) == [expected_error]
+
+
+def test_multiple_enums():
+    """See https://github.com/pydantic/pydantic/issues/6270"""
+
+    class MyEnum(Enum):
+        a = auto()
+
+    class MyModel(TypedDict):
+        a: Optional[MyEnum]
+        b: Optional[MyEnum]
+
+    TypeAdapter(MyModel)

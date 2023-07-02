@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import pytest
+from pydantic_core import core_schema
 from pytest_examples import CodeExample, EvalExample, find_examples
 
 from pydantic.errors import PydanticErrorCodes
@@ -65,20 +66,19 @@ group_globals = GroupModuleGlobals()
 
 class MockedDatetime(datetime):
     @classmethod
-    def now(cls, *args, **kwargs):
-        return datetime(2032, 1, 2, 3, 4, 5, 6)
+    def now(cls, *args, tz=None, **kwargs):
+        return datetime(2032, 1, 2, 3, 4, 5, 6, tzinfo=tz)
 
 
 skip_reason = skip_docs_tests()
+LINE_LENGTH = 80
 
 
 def print_callback(print_statement: str) -> str:
     return re.sub(r'(https://errors.pydantic.dev)/.+?/', r'\1/2/', print_statement)
 
 
-def run_example(  # noqa C901
-    example: CodeExample, eval_example: EvalExample, mocker: Any, ruff_ignore: list[str] | None = None
-) -> None:
+def run_example(example: CodeExample, eval_example: EvalExample, mocker: Any) -> None:  # noqa C901
     eval_example.print_callback = print_callback
 
     prefix_settings = example.prefix_settings()
@@ -95,11 +95,11 @@ def run_example(  # noqa C901
 
     group_name = prefix_settings.get('group')
 
-    eval_example.set_config(ruff_ignore=['D'])
+    eval_example.set_config(ruff_ignore=['D'], line_length=LINE_LENGTH)
     if '# ignore-above' in example.source:
-        eval_example.set_config(ruff_ignore=['D', 'E402'])
+        eval_example.set_config(ruff_ignore=['D', 'E402'], line_length=LINE_LENGTH)
     if group_name:
-        eval_example.set_config(ruff_ignore=['D', 'F821'])
+        eval_example.set_config(ruff_ignore=['D', 'F821'], line_length=LINE_LENGTH)
 
     if not lint_settings.startswith('skip'):
         if eval_example.update_examples:
@@ -107,7 +107,7 @@ def run_example(  # noqa C901
         else:
             if example.in_py_file():
                 # Ignore isort as double newlines will cause it to fail, but we remove them in py files
-                eval_example.set_config(ruff_ignore=eval_example.config.ruff_ignore + ['I001'])
+                eval_example.set_config(ruff_ignore=eval_example.config.ruff_ignore + ['I001'], line_length=LINE_LENGTH)
             eval_example.lint(example)
 
     if test_settings.startswith('skip'):
@@ -149,7 +149,7 @@ def test_docstrings_examples(example: CodeExample, eval_example: EvalExample, tm
     if str(example.path).startswith(str(SOURCES_ROOT / 'v1')):
         pytest.skip('skip v1 examples')
 
-    run_example(example, eval_example, mocker, ruff_ignore=['I001'])
+    run_example(example, eval_example, mocker)
 
 
 @pytest.mark.filterwarnings('ignore:(parse_obj_as|schema_json_of|schema_of) is deprecated.*:DeprecationWarning')
@@ -177,7 +177,7 @@ def test_docs_examples(example: CodeExample, eval_example: EvalExample, tmp_path
 def test_docs_devtools_example(example: CodeExample, eval_example: EvalExample, tmp_path: Path):
     from ansi2html import Ansi2HTMLConverter
 
-    eval_example.set_config(ruff_ignore=['D'])
+    eval_example.set_config(ruff_ignore=['D'], line_length=LINE_LENGTH)
 
     if eval_example.update_examples:
         eval_example.format(example)
@@ -218,3 +218,37 @@ def test_error_codes():
     documented_error_codes = tuple(re.findall(r'^## .+ \{#(.+?)}$', error_text, flags=re.MULTILINE))
 
     assert code_error_codes == documented_error_codes, 'Error codes in code and docs do not match'
+
+
+def test_validation_error_codes():
+    error_text = (DOCS_ROOT / 'usage/validation_errors.md').read_text()
+
+    expected_validation_error_codes = set(core_schema.ErrorType.__args__)
+    # Remove codes that are not currently accessible from pydantic:
+    expected_validation_error_codes.remove('timezone_offset')  # not currently exposed for configuration in pydantic
+
+    test_failures = []
+
+    documented_validation_error_codes = []
+    error_code_section = None
+    printed_error_code = None
+    for line in error_text.splitlines():
+        section_match = re.fullmatch(r'## `(.+)`', line)
+        if section_match:
+            if error_code_section is not None and printed_error_code != error_code_section:
+                test_failures.append(f'Error code {error_code_section!r} is not printed in its example')
+            error_code_section = section_match.group(1)
+            if error_code_section not in expected_validation_error_codes:
+                test_failures.append(f'Documented error code {error_code_section!r} is not a member of ErrorType')
+            documented_validation_error_codes.append(error_code_section)
+            printed_error_code = None
+            continue
+
+        printed_match = re.search("#> '(.+)'", line)
+        if printed_match:
+            printed_error_code = printed_match.group(1)
+
+    assert test_failures == []
+
+    code_validation_error_codes = sorted(expected_validation_error_codes)
+    assert code_validation_error_codes == documented_validation_error_codes, 'Error codes in code and docs do not match'

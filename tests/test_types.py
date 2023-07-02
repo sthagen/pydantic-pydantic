@@ -1039,6 +1039,18 @@ def test_decimal_strict():
     assert Model(v=v).v == v
     assert Model(v=v).model_dump() == {'v': v}
 
+    assert Model.model_validate_json('{"v": "1.23"}').v == Decimal('1.23')
+
+
+def test_decimal_precision() -> None:
+    ta = TypeAdapter(Decimal)
+
+    num = f'{1234567890 * 100}.{1234567890 * 100}'
+
+    expected = Decimal(num)
+    assert ta.validate_python(num) == expected
+    assert ta.validate_json(f'"{num}"') == expected
+
 
 def test_strict_date():
     class Model(BaseModel):
@@ -2196,7 +2208,7 @@ def test_sequence_generator_fails():
                 {
                     'type': 'float_parsing',
                     'loc': ('v', 0),
-                    'msg': 'Input should be a valid number, unable to parse string as an number',
+                    'msg': 'Input should be a valid number, unable to parse string as a number',
                     'input': 'a',
                 },
             ],
@@ -2208,7 +2220,7 @@ def test_sequence_generator_fails():
                 {
                     'type': 'float_parsing',
                     'loc': ('v', 2),
-                    'msg': 'Input should be a valid number, unable to parse string as an number',
+                    'msg': 'Input should be a valid number, unable to parse string as a number',
                     'input': 'a',
                 },
             ],
@@ -2522,6 +2534,8 @@ def test_strict_bytes_max_length():
 
 def test_strict_str():
     class FruitEnum(str, Enum):
+        """A subclass of a string"""
+
         pear = 'pear'
         banana = 'banana'
 
@@ -2530,9 +2544,7 @@ def test_strict_str():
 
     assert Model(v='foobar').v == 'foobar'
 
-    msg = r'Input should be a string, not an instance of a subclass of str \[type=string_sub_type,'
-    with pytest.raises(ValidationError, match=msg):
-        Model(v=FruitEnum.banana)
+    assert Model.model_validate({'v': FruitEnum.banana}) == Model.model_construct(v=FruitEnum.banana)
 
     with pytest.raises(ValidationError, match='Input should be a valid string'):
         Model(v=123)
@@ -4644,16 +4656,17 @@ def test_default_union_class():
     assert isinstance(Model(y=B(x='b')).y, B)
 
 
-def test_union_subclass():
+@pytest.mark.parametrize('max_length', [10, None])
+def test_union_subclass(max_length: Union[int, None]):
     class MyStr(str):
         ...
 
     class Model(BaseModel):
-        x: Union[int, str]
+        x: Union[int, Annotated[str, Field(max_length=max_length)]]
 
-    # see https://github.com/pydantic/pydantic-core/pull/294, since subclasses are no-longer allowed as valid
-    # inputs to strict-string, this doesn't work
-    assert Model(x=MyStr('1')).x == 1
+    v = Model(x=MyStr('1')).x
+    assert type(v) is MyStr
+    assert v == '1'
 
 
 def test_union_compound_types():

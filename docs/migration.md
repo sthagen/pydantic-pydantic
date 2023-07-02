@@ -2,26 +2,53 @@
 description: Migrating from Pydantic V1.
 ---
 
-The Pydantic V2 beta introduces a number of changes to the API, including some breaking changes.
+Pydantic V2 introduces a number of changes to the API, including some breaking changes.
 
-We believe Pydantic V2 is ready for your production applications. This page provides a guide highlighting the most
+This page provides a guide highlighting the most
 important changes to help you migrate your code from Pydantic V1 to Pydantic V2.
 
-## Install Pydantic V2 beta
+## Install Pydantic V2
 
-Your feedback will be a critical part of ensuring that we have made the right tradeoffs with the API changes in
-Pydantic V2.
-
-To get started with the Pydantic V2 beta, install it from PyPI.
-We recommend using a virtual environment to isolate your testing environment:
+Pydantic V2 is now the current production release of Pydantic.
+You can install Pydantic V2 from PyPI:
 
 ```bash
-pip install --pre -U "pydantic>=2.0b3"
+pip install -U pydantic
 ```
 
-If you do encounter any issues, please [create an issue in GitHub](https://github.com/pydantic/pydantic/issues) using
+If you encounter any issues, please [create an issue in GitHub](https://github.com/pydantic/pydantic/issues) using
 the `bug V2` label. This will help us to actively monitor and track errors, and to continue to improve the library's
 performance.
+
+If you need to use latest Pydantic V1 for any reason, you can install it with:
+
+```bash
+pip install "pydantic==1.*"
+```
+
+## Code Transformation Tool
+
+We have created a tool to help you migrate your code. This tool is still in beta, but we hope it will help you to
+migrate your code more quickly.
+
+You can install the tool from PyPI:
+
+```bash
+pip install bump-pydantic
+```
+
+The usage is simple. If your project structure is:
+
+    * repo_folder
+        * my_package
+            * <python source files> ...
+
+Then you'll want to do:
+
+    cd /path/to/repo_folder
+    bump-pydantic my_package
+
+See more about it on the [Bump Pydantic](https://github.com/pydantic/bump-pydantic) repository.
 
 ## Migration guide
 
@@ -66,7 +93,7 @@ to help ease migration, but calling them will emit `DeprecationWarning`s.
     [`@model_serializer`](api/functional_serializers.md#pydantic.functional_serializers.model_serializer), and
     [`@computed_field`](api/fields.md#pydantic.fields.computed_field) decorators, which each address various
     shortcomings from Pydantic V1.
-    * See [Custom serializers](usage/exporting_models.md#custom-serializers) for the usage docs of these new decorators.
+    * See [Custom serializers](usage/serialization.md#custom-serializers) for the usage docs of these new decorators.
     * Due to performance overhead and implementation complexity, we have now removed support for specifying
         `json_encoders` in the model config. This functionality was originally added for the purpose of achieving custom
         serialization logic, and we think the new serialization decorators are a better choice in most common scenarios.
@@ -77,7 +104,7 @@ to help ease migration, but calling them will emit `DeprecationWarning`s.
   model. In V1, we would always include all fields from the subclass instance. In V2, when we dump a model, we only
   include the fields that are defined on the annotated type of the field. This helps prevent some accidental security
   bugs. You can read more about this (including how to opt out of this behavior) in the
-  [Subclass instances for fields of BaseModel, dataclasses, TypedDict](usage/exporting_models.md#subclass-instances-for-fields-of-basemodel-dataclasses-typeddict)
+  [Subclass instances for fields of BaseModel, dataclasses, TypedDict](usage/serialization.md#subclass-instances-for-fields-of-basemodel-dataclasses-typeddict)
   section of the model exporting docs.
 * `GetterDict` has been removed as it was just an implementation detail of `orm_mode`, which has been removed.
 
@@ -111,6 +138,7 @@ The following properties have been removed from or changed in `Field`:
 - `unique_items`
 - `allow_mutation` (use `frozen` instead)
 - `regex` (use `pattern` instead)
+- `final` (use the `typing.Final` type hint instead)
 
 * [TODO: Need to document any other backwards-incompatible changes to `pydantic.Field`]
 
@@ -462,7 +490,7 @@ from pydantic import BaseModel, ValidationError
 
 class Foo(BaseModel):
     f1: str  # required, cannot be None
-    f2: Optional[str]  # required, can be None - same as Union[str, None] / str | None
+    f2: Optional[str]  # required, can be None - same as str | None
     f3: Optional[str] = None  # not required, can be None
     f4: str = 'Foobar'  # not required, but cannot be None
 

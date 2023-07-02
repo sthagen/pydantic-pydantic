@@ -1,3 +1,6 @@
+!!! warning
+    This page still needs to be updated for v2.0.
+
 If you don't want to use _pydantic_'s `BaseModel` you can instead get the same data validation on standard
 [dataclasses](https://docs.python.org/3/library/dataclasses.html) (introduced in Python 3.7).
 
@@ -16,7 +19,9 @@ class User:
 
 user = User(id='42', signup_ts='2032-06-21T12:00')
 print(user)
-#> User(id=42, name='John Doe', signup_ts=datetime.datetime(2032, 6, 21, 12, 0))
+"""
+User(id=42, name='John Doe', signup_ts=datetime.datetime(2032, 6, 21, 12, 0))
+"""
 ```
 
 !!! note
@@ -60,7 +65,11 @@ print(TypeAdapter(User).json_schema())
     'properties': {
         'id': {'title': 'Id', 'type': 'integer'},
         'name': {'default': 'John Doe', 'title': 'Name', 'type': 'string'},
-        'friends': {'items': {'type': 'integer'}, 'title': 'Friends', 'type': 'array'},
+        'friends': {
+            'items': {'type': 'integer'},
+            'title': 'Friends',
+            'type': 'array',
+        },
         'age': {
             'anyOf': [{'type': 'integer'}, {'type': 'null'}],
             'default': None,
@@ -227,7 +236,9 @@ file = File(
     last_modification_time='2020-01-01T00:00',
 )  # nothing is validated as expected
 print(file)
-#> File(filename=['not', 'a', 'string'], last_modification_time='2020-01-01T00:00')
+"""
+File(filename=['not', 'a', 'string'], last_modification_time='2020-01-01T00:00')
+"""
 
 try:
     Foo(file=file)
@@ -283,8 +294,9 @@ try:
         dc: DC
         other: str
 
+    # invalid as it is now a pydantic dataclass
     Model(dc=my_dc, other='other')
-except PydanticSchemaGenerationError as e:  # invalid as it is now a pydantic dataclass
+except PydanticSchemaGenerationError as e:
     print(e.message)
     """
     Unable to generate pydantic-core schema for <class '__main__.ArbitraryType'>. Set `arbitrary_types_allowed=True` in the model_config to ignore this error or implement `__get_pydantic_core_schema__` on your type to fully support it.

@@ -8,6 +8,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    PydanticDeprecatedSince20,
     PydanticUserError,
     ValidationError,
     create_model,
@@ -182,7 +183,7 @@ def test_inheritance_validators_always():
 
 
 def test_inheritance_validators_all():
-    with pytest.warns(DeprecationWarning, match='Pydantic V1 style `@validator` validators are deprecated'):
+    with pytest.warns(PydanticDeprecatedSince20, match='Pydantic V1 style `@validator` validators are deprecated'):
 
         class BarModel(BaseModel):
             @validator('*')
@@ -482,7 +483,7 @@ def test_create_model_tuple():
 
 
 def test_create_model_tuple_3():
-    with pytest.raises(PydanticUserError, match=r'^Field definitions should either be a `\(<type>, <default>\)`\.\n'):
+    with pytest.raises(PydanticUserError, match=r'^Field definitions should be a `\(<type>, <default>\)`\.\n'):
         create_model('FooModel', foo=(Tuple[int, int], (1, 2), 'more'))
 
 

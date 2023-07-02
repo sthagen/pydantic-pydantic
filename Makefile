@@ -24,13 +24,13 @@ rebuild-lockfiles: .pdm
 
 .PHONY: format  ## Auto-format python source files
 format: .pdm
-	pdm run black --exclude 'pydantic/v1' $(sources)
+	pdm run black $(sources)
 	pdm run ruff --fix $(sources)
 
 .PHONY: lint  ## Lint python source files
 lint: .pdm
 	pdm run ruff $(sources)
-	pdm run black --exclude 'pydantic/v1' $(sources) --check --diff
+	pdm run black $(sources) --check --diff
 
 .PHONY: codespell  ## Use Codespell to do spellchecking
 codespell: .pre-commit
@@ -43,6 +43,18 @@ typecheck: .pre-commit .pdm
 .PHONY: test-mypy  ## Run the mypy integration tests
 test-mypy: .pdm
 	pdm run coverage run -m pytest tests/mypy --test-mypy
+
+.PHONY: test-mypy-update  ## Update the mypy integration tests for the current mypy version
+test-mypy-update: .pdm
+	pdm run coverage run -m pytest tests/mypy --test-mypy --update-mypy
+
+.PHONY: test-mypy-update-all  ## Update the mypy integration tests for all mypy versions
+test-mypy-update-all: .pdm
+	rm -rf tests/mypy/outputs
+	pip install --force mypy==1.0.1 && make test-mypy-update
+	pip install --force mypy==1.1.1 && make test-mypy-update
+	pip install --force mypy==1.2.0 && make test-mypy-update
+	pip install --force mypy==1.4.1 && make test-mypy-update
 
 .PHONY: test-pyright  ## Run the pyright integration tests
 test-pyright: .pdm
@@ -65,9 +77,9 @@ test-examples: .pdm
 	@find docs/examples -type f -name '*.py' | xargs -I'{}' sh -c 'pdm run python {} >/dev/null 2>&1 || (echo "{} failed")'
 
 .PHONY: test-fastapi  ## Run the FastAPI tests with this version of pydantic
-test-fastapi: .pdm
+test-fastapi:
 	git clone https://github.com/tiangolo/fastapi.git --single-branch
-	pdm run ./tests/test_fastapi.sh
+	./tests/test_fastapi.sh
 
 .PHONY: test-pydantic-settings  ## Run the pydantic-settings tests with this version of pydantic
 test-pydantic-settings: .pdm

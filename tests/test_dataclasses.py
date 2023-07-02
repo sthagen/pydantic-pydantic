@@ -12,13 +12,14 @@ from typing import Any, Callable, ClassVar, Dict, FrozenSet, Generic, List, Opti
 import pytest
 from dirty_equals import HasRepr
 from pydantic_core import ArgsKwargs, SchemaValidator
-from typing_extensions import Literal
+from typing_extensions import Annotated, Literal
 
 import pydantic
 from pydantic import (
     BaseModel,
     ConfigDict,
     FieldValidationInfo,
+    PydanticDeprecatedSince20,
     PydanticUndefinedAnnotation,
     PydanticUserError,
     TypeAdapter,
@@ -308,7 +309,7 @@ def test_post_init_inheritance_chain():
 
 
 def test_post_init_post_parse():
-    with pytest.warns(DeprecationWarning, match='Support for `__post_init_post_parse__` has been dropped'):
+    with pytest.warns(PydanticDeprecatedSince20, match='Support for `__post_init_post_parse__` has been dropped'):
 
         @pydantic.dataclasses.dataclass
         class MyDataclass:
@@ -437,7 +438,7 @@ def test_nested_dataclass():
             'loc': ('n',),
             'msg': 'Input should be a dictionary or an instance of Nested',
             'input': 'not nested',
-            'ctx': {'dataclass_name': 'Nested'},
+            'ctx': {'class_name': 'Nested'},
         }
     ]
 
@@ -1238,7 +1239,7 @@ def test_json_schema_with_computed_field():
         '$defs': {
             'MyDataclass': {
                 'properties': {
-                    'double_x': {'title': 'Double X', 'type': 'integer'},
+                    'double_x': {'readOnly': True, 'title': 'Double X', 'type': 'integer'},
                     'x': {'title': 'X', 'type': 'integer'},
                 },
                 'required': ['x', 'double_x'],
@@ -1496,13 +1497,14 @@ def test_self_reference_dataclass():
     with pytest.raises(ValidationError) as exc_info:
         MyDataclass(self_reference=1)
 
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
-            'ctx': {'dataclass_name': 'MyDataclass'},
-            'input': 1,
+            'type': 'dataclass_type',
             'loc': ('self_reference',),
             'msg': 'Input should be a dictionary or an instance of MyDataclass',
-            'type': 'dataclass_type',
+            'input': 1,
+            'ctx': {'class_name': 'MyDataclass'},
         }
     ]
 
@@ -1541,13 +1543,14 @@ def test_cyclic_reference_dataclass(create_module):
 
     with pytest.raises(ValidationError) as exc_info:
         D2(d1=D2())
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
-            'ctx': {'dataclass_name': 'D1'},
-            'input': D2(d1=None),
+            'type': 'dataclass_type',
             'loc': ('d1',),
             'msg': 'Input should be a dictionary or an instance of D1',
-            'type': 'dataclass_type',
+            'input': D2(d1=None),
+            'ctx': {'class_name': 'D1'},
         }
     ]
 
@@ -1603,13 +1606,14 @@ def test_cross_module_cyclic_reference_dataclass(create_module):
 
     with pytest.raises(ValidationError) as exc_info:
         module.D2(d1=module.D2())
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
-            'ctx': {'dataclass_name': 'D1'},
+            'type': 'dataclass_type',
             'input': module.D2(d1=None),
             'loc': ('d1',),
             'msg': 'Input should be a dictionary or an instance of D1',
-            'type': 'dataclass_type',
+            'ctx': {'class_name': 'D1'},
         }
     ]
 
@@ -1829,7 +1833,7 @@ def test_config_as_type_deprecated():
         validate_assignment = True
 
     with pytest.warns(
-        DeprecationWarning, match='Support for class-based `config` is deprecated, use ConfigDict instead.'
+        PydanticDeprecatedSince20, match='Support for class-based `config` is deprecated, use ConfigDict instead.'
     ):
 
         @pydantic.dataclasses.dataclass(config=Config)
@@ -2347,3 +2351,52 @@ def test_model_config_override_in_decorator_empty_config() -> None:
 
     ta = TypeAdapter(Model)
     assert ta.validate_python({'x': 'ABC '}).x == 'ABC '
+
+
+def test_pydantic_field_annotation():
+    @pydantic.dataclasses.dataclass
+    class Model:
+        x: Annotated[int, Field(gt=0)]
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(x=-1)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'ctx': {'gt': 0},
+            'input': -1,
+            'loc': ('x',),
+            'msg': 'Input should be greater than 0',
+            'type': 'greater_than',
+        }
+    ]
+
+
+def test_combined_field_annotations():
+    """
+    This test is included to document the fact that `Field` and `field` can be used together.
+    That said, if you mix them like this, there is a good chance you'll run into surprising behavior/bugs.
+
+    (E.g., `x: Annotated[int, Field(gt=1, validate_default=True)] = field(default=0)` doesn't cause an error)
+
+    I would generally advise against doing this, and if we do change the behavior in the future to somehow merge
+    pydantic.FieldInfo and dataclasses.Field in a way that changes runtime behavior for existing code, I would probably
+    consider it a bugfix rather than a breaking change.
+    """
+
+    @pydantic.dataclasses.dataclass
+    class Model:
+        x: Annotated[int, Field(gt=1)] = dataclasses.field(default=1)
+
+    assert Model().x == 1
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(x=0)
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'ctx': {'gt': 1},
+            'input': 0,
+            'loc': ('x',),
+            'msg': 'Input should be greater than 1',
+            'type': 'greater_than',
+        }
+    ]
