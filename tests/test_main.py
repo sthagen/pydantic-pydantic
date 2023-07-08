@@ -18,6 +18,7 @@ from typing import (
     Set,
     Type,
     TypeVar,
+    Union,
     get_type_hints,
 )
 from uuid import UUID, uuid4
@@ -230,6 +231,10 @@ def test_allow_extra():
     assert m.a == 10.2
     assert m.b == 12
     assert m.model_extra == {'b': 12}
+    m.c = 42
+    assert 'c' not in m.__dict__
+    assert m.__pydantic_extra__ == {'b': 12, 'c': 42}
+    assert m.model_dump() == {'a': 10.2, 'b': 12, 'c': 42}
 
 
 @pytest.mark.parametrize('extra', ['ignore', 'forbid', 'allow'])
@@ -308,6 +313,16 @@ def test_assign_extra_validate():
         model.b = 2
 
 
+def test_model_property_attribute_error():
+    class Model(BaseModel):
+        @property
+        def a_property(self):
+            raise AttributeError('Internal Error')
+
+    with pytest.raises(AttributeError, match='Internal Error'):
+        Model().a_property
+
+
 def test_extra_allowed():
     class Model(BaseModel):
         model_config = ConfigDict(extra='allow')
@@ -375,6 +390,13 @@ def test_extra_broken_via_pydantic_extra_interference():
         m.extra_field
 
     assert e.value.args == ("'Model' object has no attribute 'extra_field'",)
+
+
+def test_model_extra_is_none_when_extra_is_forbid():
+    class Foo(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+
+    assert Foo().model_extra is None
 
 
 def test_set_attr(UltraSimpleModel):
@@ -646,6 +668,32 @@ def test_literal_enum_values():
             'ctx': {'expected': "<FooEnum.foo: 'foo_value'>"},
         }
     ]
+
+
+def test_strict_enum_values():
+    class MyEnum(Enum):
+        val = 'val'
+
+    class Model(BaseModel):
+        model_config = ConfigDict(use_enum_values=True)
+        x: MyEnum
+
+    assert Model.model_validate({'x': MyEnum.val}, strict=True).x == 'val'
+
+
+def test_union_enum_values():
+    class MyEnum(Enum):
+        val = 'val'
+
+    class NormalModel(BaseModel):
+        x: Union[MyEnum, int]
+
+    class UseEnumValuesModel(BaseModel):
+        model_config = ConfigDict(use_enum_values=True)
+        x: Union[MyEnum, int]
+
+    assert NormalModel(x=MyEnum.val).x != 'val'
+    assert UseEnumValuesModel(x=MyEnum.val).x == 'val'
 
 
 def test_enum_raw():
@@ -2251,14 +2299,23 @@ def test_recursion_loop_error():
 
 
 def test_protected_namespace_default():
-    with pytest.raises(NameError, match='Field "model_prefixed_field" has conflict with protected namespace "model_"'):
+    with pytest.warns(UserWarning, match='Field "model_prefixed_field" has conflict with protected namespace "model_"'):
 
         class Model(BaseModel):
             model_prefixed_field: str
 
 
+def test_protected_namespace_real_conflict():
+    with pytest.raises(
+        NameError, match=r'Field "model_validate" conflicts with member .* of protected namespace "model_"\.'
+    ):
+
+        class Model(BaseModel):
+            model_validate: str
+
+
 def test_custom_protected_namespace():
-    with pytest.raises(NameError, match='Field "test_field" has conflict with protected namespace "test_"'):
+    with pytest.warns(UserWarning, match='Field "test_field" has conflict with protected namespace "test_"'):
 
         class Model(BaseModel):
             # this field won't raise error because we changed the default value for the
@@ -2270,8 +2327,8 @@ def test_custom_protected_namespace():
 
 
 def test_multiple_protected_namespace():
-    with pytest.raises(
-        NameError, match='Field "also_protect_field" has conflict with protected namespace "also_protect_"'
+    with pytest.warns(
+        UserWarning, match='Field "also_protect_field" has conflict with protected namespace "also_protect_"'
     ):
 
         class Model(BaseModel):
@@ -2622,3 +2679,32 @@ def test_super_delattr_private():
     assert test_calls == []
     del m.test
     assert test_calls == ['success']
+
+
+def test_arbitrary_types_not_a_type() -> None:
+    """https://github.com/pydantic/pydantic/issues/6477"""
+
+    class Foo:
+        pass
+
+    class Bar:
+        pass
+
+    with pytest.warns(UserWarning, match='is not a Python type'):
+        ta = TypeAdapter(Foo(), config=ConfigDict(arbitrary_types_allowed=True))
+
+    bar = Bar()
+    assert ta.validate_python(bar) is bar
+
+
+def test_deferred_core_schema() -> None:
+    class Foo(BaseModel):
+        x: 'Bar'
+
+    with pytest.raises(PydanticUserError, match='`Foo` is not fully defined'):
+        Foo.__pydantic_core_schema__
+
+    class Bar(BaseModel):
+        pass
+
+    assert Foo.__pydantic_core_schema__

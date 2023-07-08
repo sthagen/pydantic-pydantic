@@ -61,7 +61,7 @@ requires-python = '>=3.7'
 dependencies = [
     'typing-extensions>=4.6.1',
     'annotated-types>=0.4.0',
-    'pydantic-core==2.0.1',
+    'pydantic-core==2.1.2',
 ]
 dynamic = ['version', 'readme']
 
@@ -109,6 +109,7 @@ testing = [
 ]
 mypy = [
     "mypy",
+    "pydantic-settings>=2.0.0",
 ]
 memray = [
     "pytest-memray",
@@ -123,7 +124,7 @@ Homepage = 'https://github.com/pydantic/pydantic'
 Documentation = 'https://docs.pydantic.dev'
 Funding = 'https://github.com/sponsors/samuelcolvin'
 Source = 'https://github.com/pydantic/pydantic'
-Changelog = 'https://docs.pydantic.dev/changelog'
+Changelog = 'https://docs.pydantic.dev/latest/changelog/'
 
 [tool.hatch.metadata.hooks.fancy-pypi-readme]
 content-type = 'text/markdown'
@@ -153,9 +154,9 @@ filterwarnings = [
 
 # configuring https://github.com/pydantic/hooky
 [tool.hooky]
-assignees = ['samuelcolvin', 'adriangb', 'dmontagu', 'hramezani', 'lig', 'Kludex']
-reviewers = ['samuelcolvin', 'adriangb', 'dmontagu', 'hramezani', 'lig', 'Kludex']
-require_change_file = false
+assignees = ['samuelcolvin', 'adriangb', 'dmontagu', 'hramezani', 'lig', 'Kludex', 'davidhewitt']
+reviewers = ['samuelcolvin', 'adriangb', 'dmontagu', 'hramezani', 'lig', 'Kludex', 'davidhewitt']
+require_change_file = true
 
 [tool.ruff]
 line-length = 120
@@ -226,4 +227,5 @@ exclude = ['pydantic/_hypothesis_plugin.py', 'pydantic/mypy.py', 'pydantic/v1']
 [tool.codespell]
 skip = '.git,env*,pydantic/v1/*'
 # `ser` - abbreviation for "ser"ialisation
-ignore-words-list = 'gir,ser'
+# `crate` - a rust crate
+ignore-words-list = 'gir,ser,crate'

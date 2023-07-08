@@ -83,7 +83,10 @@ class ImportThings(BaseModel):
 
 # Create an instance
 m = ImportThings(obj='math:cos')
-m.model_dump_json()
+print(m)
+#> obj=<built-in function cos>
+print(m.model_dump_json())
+#> {"obj":"math.cos"}
 ```
 
 ## Constrained Types
@@ -99,5 +102,4 @@ The following arguments are available when using the `constr` type function
 - `strict: bool = False`: controls type coercion
 - `min_length: int = None`: minimum length of the string
 - `max_length: int = None`: maximum length of the string
-- `curtail_length: int = None`: shrinks the string length to the set value when it is longer than the set value
-- `regex: str = None`: regex to validate the string against
+- `pattern: str = None`: regex to validate the string against

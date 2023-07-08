@@ -3,13 +3,14 @@ import inspect
 import sys
 from datetime import datetime
 from functools import partial
-from typing import List
+from typing import List, Tuple
 
 import pytest
 from pydantic_core import ArgsKwargs
-from typing_extensions import Annotated
+from typing_extensions import Annotated, TypedDict
 
 from pydantic import Field, TypeAdapter, ValidationError, validate_call
+from pydantic.main import BaseModel
 
 skip_pre_38 = pytest.mark.skipif(sys.version_info < (3, 8), reason='testing >= 3.8 behaviour only')
 skip_pre_39 = pytest.mark.skipif(sys.version_info < (3, 9), reason='testing >= 3.9 behaviour only')
@@ -621,3 +622,50 @@ def f(a: int, /, **kwargs):
 """
     )
     assert module.f(1, a=2) == (1, {'a': 2})
+
+
+def test_model_as_arg() -> None:
+    class Model1(TypedDict):
+        x: int
+
+    class Model2(BaseModel):
+        y: int
+
+    @validate_call(validate_return=True)
+    def f1(m1: Model1, m2: Model2) -> Tuple[Model1, Model2]:
+        return (m1, m2.model_dump())  # type: ignore
+
+    res = f1({'x': '1'}, {'y': '2'})  # type: ignore
+    assert res == ({'x': 1}, Model2(y=2))
+
+
+def test_do_not_call_repr_on_validate_call() -> None:
+    class Class:
+        @validate_call
+        def __init__(self, number: int) -> None:
+            ...
+
+        def __repr__(self) -> str:
+            assert False
+
+    Class(50)
+
+
+def test_methods_are_not_rebound():
+    class Thing:
+        def __init__(self, x: int):
+            self.x = x
+
+        def a(self, x: int):
+            return x + self.x
+
+        c = validate_call(a)
+
+    thing = Thing(1)
+    assert thing.a == thing.a
+    assert thing.c == thing.c
+    assert Thing.c == Thing.c
+
+    # Ensure validation is still happening
+    assert Thing.c(thing, '2') == 3
+    assert Thing(2).c('3') == 5

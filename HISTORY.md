@@ -1,3 +1,24 @@
+## v2.0.2 (2023-07-05)
+
+* Fix bug where round-trip pickling/unpickling a `RootModel` would change the value of `__dict__`, #6457 by @dmontagu
+* Allow single-item discriminated unions, #6405 by @dmontagu
+* Fix issue with union parsing of enums, #6440 by @dmontagu
+* Docs: Fixed `constr` documentation, renamed old `regex` to new `pattern`, #6452 by @miili
+* Change `GenerateJsonSchema.generate_definitions` signature, #6436 by @dmontagu
+
+See the full changelog [here](https://github.com/pydantic/pydantic/releases/tag/v2.0.2)
+
+## v2.0.1 (2023-07-04)
+
+First patch release of Pydantic V2
+
+* Extra fields added via `setattr` (i.e. `m.some_extra_field = 'extra_value'`)
+  are added to `.model_extra` if `model_config` `extra='allowed'`. Fixed #6333, #6365 by @aaraney
+* Automatically unpack JSON schema '$ref' for custom types, #6343 by @adriangb
+* Fix tagged unions multiple processing in submodels, #6340 by @suharnikov
+
+See the full changelog [here](https://github.com/pydantic/pydantic/releases/tag/v2.0.1)
+
 ## v2.0 (2023-06-30)
 
 Pydantic V2 is here! :tada:
@@ -47,6 +68,10 @@ See the full changelog [here](https://github.com/pydantic/pydantic/releases/tag/
 First pre-release of Pydantic V2!
 
 See [this post](https://docs.pydantic.dev/blog/pydantic-v2-alpha/) for more details.
+
+## v1.10.11 (2023-07-04)
+
+* Importing create_model in tools.py through relative path instead of absolute path - so that it doesn't import V2 code when copied over to V2 branch, #6361 by @SharathHuddar
 
 ## v1.10.10 (2023-06-30)
 

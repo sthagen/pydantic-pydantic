@@ -55,7 +55,7 @@ jobs:
       run: pdm install -G docs
 
     - run: pdm run python -c 'import docs.plugins.main'
-    - run: pdm run mkdocs build --verbose
+    - run: pdm run mkdocs build
 
   test-memray:
     name: test memray
@@ -243,14 +243,17 @@ jobs:
           path: htmlcov
 
   test-typing-extensions:
-    name: test typing-extensions
+    name: test typing-extensions ${{ matrix.typing-extensions-version }} on Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         # test the oldest supported version and main
         typing-extensions-version: ['4.6.1', 'main']
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+        include:
+          - typing-extensions-version: '4.6.1'
+            python-version: '3.7'
 
     steps:
     - uses: actions/checkout@v3
@@ -268,7 +271,7 @@ jobs:
     - name: install typing-extensions
       run: |
         if [ ${{ matrix.typing-extensions-version }} == 'main' ]; then
-          pdm remove typing-extensions && pdm add 'git+https://github.com/python/typing_extensions.git'
+          pdm remove typing-extensions && pip install 'git+https://github.com/python/typing_extensions.git'
         else
           pdm remove typing-extensions && pdm add 'typing-extensions==${{ matrix.typing-extensions-version }}'
         fi
@@ -386,7 +389,7 @@ jobs:
   send-tweet:
     name: Send tweet
     needs: [release]
-    if: needs.release.status == 'success'
+    if: needs.release.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -407,13 +410,15 @@ jobs:
               consumer_key=os.getenv("TWITTER_CONSUMER_KEY"),
               consumer_secret=os.getenv("TWITTER_CONSUMER_SECRET"),
           )
-          tweet = os.getenv("TWEET")
+          version = os.getenv("VERSION").strip('"')
+          tweet = os.getenv("TWEET").format(version=version)
           client.create_tweet(text=tweet)
         env:
+          VERSION: ${{ needs.release.outputs.pydantic-version }}
           TWEET: |
-            Pydantic version ${{needs.release.outputs.pydantic-version}} is out! 🎉
+            Pydantic version {version} is out! 🎉
 
-            https://github.com/pydantic/pydantic/releases/tag/v${{needs.release.outputs.pydantic-version}}
+            https://github.com/pydantic/pydantic/releases/tag/v{version}
           TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
           TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
           TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}

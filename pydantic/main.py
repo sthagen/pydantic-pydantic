@@ -703,7 +703,11 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
                     except KeyError as exc:
                         raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
                 else:
-                    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+                    if hasattr(self.__class__, item):
+                        return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                    else:
+                        # this is the current error
+                        raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name in self.__class_vars__:
@@ -737,6 +741,9 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
         elif self.model_config.get('extra') != 'allow' and name not in self.model_fields:
             # TODO - matching error
             raise ValueError(f'"{self.__class__.__name__}" object has no field "{name}"')
+        elif self.model_config.get('extra') == 'allow' and name not in self.model_fields:
+            # SAFETY: __pydantic_extra__ is not None when extra = 'allow'
+            self.__pydantic_extra__[name] = value  # type: ignore
         else:
             self.__dict__[name] = value
             self.__pydantic_fields_set__.add(name)
@@ -775,10 +782,10 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
         }
 
     def __setstate__(self, state: dict[Any, Any]) -> None:
-        _object_setattr(self, '__dict__', state['__dict__'])
         _object_setattr(self, '__pydantic_fields_set__', state['__pydantic_fields_set__'])
         _object_setattr(self, '__pydantic_extra__', state['__pydantic_extra__'])
         _object_setattr(self, '__pydantic_private__', state['__pydantic_private__'])
+        _object_setattr(self, '__dict__', state['__dict__'])
 
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, BaseModel):
