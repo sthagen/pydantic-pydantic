@@ -95,11 +95,11 @@ def run_example(example: CodeExample, eval_example: EvalExample, mocker: Any) ->
 
     group_name = prefix_settings.get('group')
 
-    eval_example.set_config(ruff_ignore=['D'], line_length=LINE_LENGTH)
+    eval_example.set_config(ruff_ignore=['D', 'T'], line_length=LINE_LENGTH)
     if '# ignore-above' in example.source:
-        eval_example.set_config(ruff_ignore=['D', 'E402'], line_length=LINE_LENGTH)
+        eval_example.set_config(ruff_ignore=eval_example.config.ruff_ignore + ['E402'], line_length=LINE_LENGTH)
     if group_name:
-        eval_example.set_config(ruff_ignore=['D', 'F821'], line_length=LINE_LENGTH)
+        eval_example.set_config(ruff_ignore=eval_example.config.ruff_ignore + ['F821'], line_length=LINE_LENGTH)
 
     if not lint_settings.startswith('skip'):
         if eval_example.update_examples:
@@ -152,6 +152,19 @@ def test_docstrings_examples(example: CodeExample, eval_example: EvalExample, tm
     run_example(example, eval_example, mocker)
 
 
+@pytest.fixture(scope='module', autouse=True)
+def set_cwd():
+    # `test_docs_examples` needs to be run from this folder or relative paths will be wrong and some tests fail
+    execution_path = str(DOCS_ROOT.parent)
+
+    cwd = os.getcwd()
+    os.chdir(execution_path)
+    try:
+        yield
+    finally:
+        os.chdir(cwd)
+
+
 @pytest.mark.filterwarnings('ignore:(parse_obj_as|schema_json_of|schema_of) is deprecated.*:DeprecationWarning')
 @pytest.mark.skipif(bool(skip_reason), reason=skip_reason or 'not skipping')
 @pytest.mark.parametrize('example', find_examples(str(DOCS_ROOT), skip=sys.platform == 'win32'), ids=str)
@@ -177,7 +190,7 @@ def test_docs_examples(example: CodeExample, eval_example: EvalExample, tmp_path
 def test_docs_devtools_example(example: CodeExample, eval_example: EvalExample, tmp_path: Path):
     from ansi2html import Ansi2HTMLConverter
 
-    eval_example.set_config(ruff_ignore=['D'], line_length=LINE_LENGTH)
+    eval_example.set_config(ruff_ignore=['D', 'T'], line_length=LINE_LENGTH)
 
     if eval_example.update_examples:
         eval_example.format(example)

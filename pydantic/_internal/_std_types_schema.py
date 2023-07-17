@@ -6,6 +6,7 @@ from __future__ import annotations as _annotations
 
 import collections
 import collections.abc
+import dataclasses
 import decimal
 import inspect
 import os
@@ -15,6 +16,7 @@ from functools import partial
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
 from typing import Any, Callable, Iterable, TypeVar
 
+import typing_extensions
 from pydantic_core import (
     CoreSchema,
     MultiHostUrl,
@@ -33,7 +35,7 @@ from ..config import ConfigDict
 from ..json_schema import JsonSchemaValue, update_json_schema
 from . import _known_annotated_metadata, _typing_extra, _validators
 from ._core_utils import get_type_ref
-from ._internal_dataclass import slots_dataclass
+from ._internal_dataclass import slots_true
 from ._schema_generation_shared import GetCoreSchemaHandler, GetJsonSchemaHandler
 
 if typing.TYPE_CHECKING:
@@ -42,7 +44,7 @@ if typing.TYPE_CHECKING:
     StdSchemaFunction = Callable[[GenerateSchema, type[Any]], core_schema.CoreSchema]
 
 
-@slots_dataclass
+@dataclasses.dataclass(**slots_true)
 class SchemaTransformer:
     get_core_schema: Callable[[Any, GetCoreSchemaHandler], CoreSchema]
     get_json_schema: Callable[[CoreSchema, GetJsonSchemaHandler], JsonSchemaValue]
@@ -134,21 +136,26 @@ def get_enum_core_schema(enum_type: type[Enum], config: ConfigDict) -> CoreSchem
     )
 
 
-@slots_dataclass
+@dataclasses.dataclass(**slots_true)
 class DecimalValidator:
-    gt: int | decimal.Decimal | None = None
-    ge: int | decimal.Decimal | None = None
-    lt: int | decimal.Decimal | None = None
-    le: int | decimal.Decimal | None = None
+    gt: decimal.Decimal | None = None
+    ge: decimal.Decimal | None = None
+    lt: decimal.Decimal | None = None
+    le: decimal.Decimal | None = None
     max_digits: int | None = None
     decimal_places: int | None = None
-    multiple_of: int | decimal.Decimal | None = None
+    multiple_of: decimal.Decimal | None = None
     allow_inf_nan: bool = False
     check_digits: bool = False
     strict: bool = False
 
     def __post_init__(self) -> None:
         self.check_digits = self.max_digits is not None or self.decimal_places is not None
+        self.gt = decimal.Decimal(self.gt) if self.gt is not None else None
+        self.ge = decimal.Decimal(self.ge) if self.ge is not None else None
+        self.lt = decimal.Decimal(self.lt) if self.lt is not None else None
+        self.le = decimal.Decimal(self.le) if self.le is not None else None
+        self.multiple_of = decimal.Decimal(self.multiple_of) if self.multiple_of is not None else None
         if self.check_digits and self.allow_inf_nan:
             raise ValueError('allow_inf_nan=True cannot be used with max_digits or decimal_places')
 
@@ -171,94 +178,120 @@ class DecimalValidator:
             return string_schema
 
     def __get_pydantic_core_schema__(self, _source_type: Any, _handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.general_after_validator_function(self.validate, core_schema.any_schema())
+        Decimal = decimal.Decimal
 
-    def validate(  # noqa: C901 (ignore complexity)
-        self, input_value: Any, info: core_schema.ValidationInfo
-    ) -> decimal.Decimal:
-        if isinstance(input_value, decimal.Decimal):
-            value = input_value
-        elif self.strict or (info.config or {}).get('strict', False) and info.mode == 'python':
-            raise PydanticCustomError(
-                'decimal_type', 'Input should be a valid Decimal instance or decimal string in JSON'
-            )
-        else:
+        def to_decimal(v: Any) -> decimal.Decimal:
             try:
-                value = decimal.Decimal(str(input_value))
-            except decimal.DecimalException:
-                raise PydanticCustomError('decimal_parsing', 'Input should be a valid decimal')
+                return Decimal(v)
+            except decimal.DecimalException as e:
+                raise PydanticCustomError('decimal_parsing', 'Input should be a valid decimal') from e
+
+        primitive_schema = core_schema.union_schema(
+            [
+                core_schema.float_schema(strict=True),
+                core_schema.int_schema(strict=True),
+                core_schema.str_schema(strict=True, strip_whitespace=True),
+            ],
+        )
+        json_schema = core_schema.no_info_after_validator_function(to_decimal, primitive_schema)
+        schema = core_schema.json_or_python_schema(
+            json_schema=json_schema,
+            python_schema=core_schema.lax_or_strict_schema(
+                lax_schema=core_schema.union_schema([core_schema.is_instance_schema(decimal.Decimal), json_schema]),
+                strict_schema=core_schema.is_instance_schema(decimal.Decimal),
+            ),
+            serialization=core_schema.to_string_ser_schema(when_used='json'),
+        )
 
         if not self.allow_inf_nan or self.check_digits:
-            try:
-                normalized_value = value.normalize()
-            except decimal.InvalidOperation:
-                normalized_value = value
-            _1, digit_tuple, exponent = normalized_value.as_tuple()
-            if not self.allow_inf_nan and exponent in {'F', 'n', 'N'}:
-                raise PydanticKnownError('finite_number')
-
-            if self.check_digits:
-                if isinstance(exponent, str):
-                    raise PydanticKnownError('finite_number')
-                elif exponent >= 0:
-                    # A positive exponent adds that many trailing zeros.
-                    digits = len(digit_tuple) + exponent
-                    decimals = 0
-                else:
-                    # If the absolute value of the negative exponent is larger than the
-                    # number of digits, then it's the same as the number of digits,
-                    # because it'll consume all the digits in digit_tuple and then
-                    # add abs(exponent) - len(digit_tuple) leading zeros after the
-                    # decimal point.
-                    if abs(exponent) > len(digit_tuple):
-                        digits = decimals = abs(exponent)
-                    else:
-                        digits = len(digit_tuple)
-                        decimals = abs(exponent)
-
-                if self.max_digits is not None and digits > self.max_digits:
-                    raise PydanticCustomError(
-                        'decimal_max_digits',
-                        'ensure that there are no more than {max_digits} digits in total',
-                        {'max_digits': self.max_digits},
-                    )
-
-                if self.decimal_places is not None and decimals > self.decimal_places:
-                    raise PydanticCustomError(
-                        'decimal_max_places',
-                        'ensure that there are no more than {decimal_places} decimal places',
-                        {'decimal_places': self.decimal_places},
-                    )
-
-                if self.max_digits is not None and self.decimal_places is not None:
-                    whole_digits = digits - decimals
-                    expected = self.max_digits - self.decimal_places
-                    if whole_digits > expected:
-                        raise PydanticCustomError(
-                            'decimal_whole_digits',
-                            'ensure that there are no more than {whole_digits} digits before the decimal point',
-                            {'whole_digits': expected},
-                        )
+            schema = core_schema.no_info_after_validator_function(
+                self.check_digits_validator,
+                schema,
+            )
 
         if self.multiple_of is not None:
-            mod = value / self.multiple_of % 1
-            if mod != 0:
+            schema = core_schema.no_info_after_validator_function(
+                partial(_validators.multiple_of_validator, multiple_of=self.multiple_of),
+                schema,
+            )
+
+        if self.gt is not None:
+            schema = core_schema.no_info_after_validator_function(
+                partial(_validators.greater_than_validator, gt=self.gt),
+                schema,
+            )
+
+        if self.ge is not None:
+            schema = core_schema.no_info_after_validator_function(
+                partial(_validators.greater_than_or_equal_validator, ge=self.ge),
+                schema,
+            )
+
+        if self.lt is not None:
+            schema = core_schema.no_info_after_validator_function(
+                partial(_validators.less_than_validator, lt=self.lt),
+                schema,
+            )
+
+        if self.le is not None:
+            schema = core_schema.no_info_after_validator_function(
+                partial(_validators.less_than_or_equal_validator, le=self.le),
+                schema,
+            )
+
+        return schema
+
+    def check_digits_validator(self, value: decimal.Decimal) -> decimal.Decimal:
+        try:
+            normalized_value = value.normalize()
+        except decimal.InvalidOperation:
+            normalized_value = value
+        _1, digit_tuple, exponent = normalized_value.as_tuple()
+        if not self.allow_inf_nan and exponent in {'F', 'n', 'N'}:
+            raise PydanticKnownError('finite_number')
+
+        if self.check_digits:
+            if isinstance(exponent, str):
+                raise PydanticKnownError('finite_number')
+            elif exponent >= 0:
+                # A positive exponent adds that many trailing zeros.
+                digits = len(digit_tuple) + exponent
+                decimals = 0
+            else:
+                # If the absolute value of the negative exponent is larger than the
+                # number of digits, then it's the same as the number of digits,
+                # because it'll consume all the digits in digit_tuple and then
+                # add abs(exponent) - len(digit_tuple) leading zeros after the
+                # decimal point.
+                if abs(exponent) > len(digit_tuple):
+                    digits = decimals = abs(exponent)
+                else:
+                    digits = len(digit_tuple)
+                    decimals = abs(exponent)
+
+            if self.max_digits is not None and digits > self.max_digits:
                 raise PydanticCustomError(
-                    'decimal_multiple_of',
-                    'Input should be a multiple of {multiple_of}',
-                    {'multiple_of': self.multiple_of},
+                    'decimal_max_digits',
+                    'ensure that there are no more than {max_digits} digits in total',
+                    {'max_digits': self.max_digits},
                 )
 
-        if self.gt is not None and not value > self.gt:  # type: ignore
-            raise PydanticKnownError('greater_than', {'gt': self.gt})
-        elif self.ge is not None and not value >= self.ge:  # type: ignore
-            raise PydanticKnownError('greater_than_equal', {'ge': self.ge})
+            if self.decimal_places is not None and decimals > self.decimal_places:
+                raise PydanticCustomError(
+                    'decimal_max_places',
+                    'ensure that there are no more than {decimal_places} decimal places',
+                    {'decimal_places': self.decimal_places},
+                )
 
-        if self.lt is not None and not value < self.lt:  # type: ignore
-            raise PydanticKnownError('less_than', {'lt': self.lt})
-        if self.le is not None and not value <= self.le:  # type: ignore
-            raise PydanticKnownError('less_than_equal', {'le': self.le})
-
+            if self.max_digits is not None and self.decimal_places is not None:
+                whole_digits = digits - decimals
+                expected = self.max_digits - self.decimal_places
+                if whole_digits > expected:
+                    raise PydanticCustomError(
+                        'decimal_whole_digits',
+                        'ensure that there are no more than {whole_digits} digits before the decimal point',
+                        {'whole_digits': expected},
+                    )
         return value
 
 
@@ -280,7 +313,7 @@ def decimal_prepare_pydantic_annotations(
     return source, [DecimalValidator(**metadata), *remaining_annotations]
 
 
-@slots_dataclass
+@dataclasses.dataclass(**slots_true)
 class InnerSchemaValidator:
     """Use a fixed CoreSchema, avoiding interference from outward annotations."""
 
@@ -446,7 +479,7 @@ def dequeue_validator(
         return collections.deque(handler(input_value), maxlen=maxlen)
 
 
-@slots_dataclass
+@dataclasses.dataclass(**slots_true)
 class SequenceValidator:
     mapped_origin: type[Any]
     item_source_type: type[Any]
@@ -579,7 +612,7 @@ MAPPING_ORIGIN_MAP: dict[Any, Any] = {
     typing.DefaultDict: collections.defaultdict,
     collections.defaultdict: collections.defaultdict,
     collections.OrderedDict: collections.OrderedDict,
-    typing.OrderedDict: collections.OrderedDict,
+    typing_extensions.OrderedDict: collections.OrderedDict,
     dict: dict,
     typing.Dict: dict,
     collections.Counter: collections.Counter,
@@ -659,7 +692,7 @@ def get_defaultdict_default_default_factory(values_source_type: Any) -> Callable
     return default_default_factory
 
 
-@slots_dataclass
+@dataclasses.dataclass(**slots_true)
 class MappingValidator:
     mapped_origin: type[Any]
     keys_source_type: type[Any]

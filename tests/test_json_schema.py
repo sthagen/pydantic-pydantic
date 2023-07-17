@@ -31,6 +31,7 @@ from typing import (
 from uuid import UUID
 
 import pytest
+from dirty_equals import HasRepr
 from pydantic_core import CoreSchema, SchemaValidator, core_schema, to_json
 from typing_extensions import Annotated, Literal, TypedDict
 
@@ -1930,7 +1931,7 @@ def test_optional_validator():
         Model(something='hellox')
     assert exc_info.value.errors(include_url=False) == [
         {
-            'ctx': {'error': 'should not contain x'},
+            'ctx': {'error': HasRepr(repr(ValueError('should not contain x')))},
             'input': 'hellox',
             'loc': ('something',),
             'msg': 'Value error, should not contain x',
@@ -5057,5 +5058,17 @@ def test_deferred_json_schema():
         'properties': {'x': {'$ref': '#/$defs/Bar'}},
         'required': ['x'],
         'title': 'Foo',
+        'type': 'object',
+    }
+
+
+def test_dollar_ref_alias():
+    class MyModel(BaseModel):
+        my_field: str = Field(alias='$ref')
+
+    assert MyModel.model_json_schema() == {
+        'properties': {'$ref': {'title': '$Ref', 'type': 'string'}},
+        'required': ['$ref'],
+        'title': 'MyModel',
         'type': 'object',
     }

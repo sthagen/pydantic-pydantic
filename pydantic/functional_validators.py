@@ -2,6 +2,7 @@
 
 from __future__ import annotations as _annotations
 
+import dataclasses
 import sys
 from functools import partialmethod
 from types import FunctionType
@@ -29,7 +30,7 @@ else:
 _inspect_validator = _decorators.inspect_validator
 
 
-@_internal_dataclass.slots_dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, **_internal_dataclass.slots_true)
 class AfterValidator:
     '''usage docs: https://docs.pydantic.dev/dev-v2/usage/validators/#annotated-validators
 
@@ -84,7 +85,7 @@ class AfterValidator:
             return core_schema.no_info_after_validator_function(self.func, schema=schema)  # type: ignore
 
 
-@_internal_dataclass.slots_dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, **_internal_dataclass.slots_true)
 class BeforeValidator:
     """usage docs: https://docs.pydantic.dev/dev-v2/usage/validators/#annotated-validators
 
@@ -95,7 +96,7 @@ class BeforeValidator:
 
     Example:
         ```py
-        from typing import Annotated
+        from typing_extensions import Annotated
 
         from pydantic import BaseModel, BeforeValidator
 
@@ -126,7 +127,7 @@ class BeforeValidator:
             return core_schema.no_info_before_validator_function(self.func, schema=schema)  # type: ignore
 
 
-@_internal_dataclass.slots_dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, **_internal_dataclass.slots_true)
 class PlainValidator:
     """usage docs: https://docs.pydantic.dev/dev-v2/usage/validators/#annotated-validators
 
@@ -137,7 +138,7 @@ class PlainValidator:
 
     Example:
         ```py
-        from typing import Annotated
+        from typing_extensions import Annotated
 
         from pydantic import BaseModel, PlainValidator
 
@@ -161,7 +162,7 @@ class PlainValidator:
             return core_schema.no_info_plain_validator_function(self.func)  # type: ignore
 
 
-@_internal_dataclass.slots_dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, **_internal_dataclass.slots_true)
 class WrapValidator:
     """usage docs: https://docs.pydantic.dev/dev-v2/usage/validators/#annotated-validators
 
@@ -172,7 +173,8 @@ class WrapValidator:
 
     ```py
     from datetime import datetime
-    from typing import Annotated
+
+    from typing_extensions import Annotated
 
     from pydantic import BaseModel, ValidationError, WrapValidator
 
@@ -409,32 +411,17 @@ class ModelBeforeValidator(Protocol):
         ...
 
 
-class ModelAfterValidatorWithoutInfo(Protocol):
-    """A `@model_validator` decorated function signature. This is used when `mode='after'` and the function does not
-    have info argument.
-    """
+ModelAfterValidatorWithoutInfo = Callable[[_ModelType], _ModelType]
+"""A `@model_validator` decorated function signature. This is used when `mode='after'` and the function does not
+have info argument.
+"""
 
-    @staticmethod
-    def __call__(  # noqa: D102
-        self: _ModelType,  # type: ignore
-    ) -> _ModelType:
-        ...
-
-
-class ModelAfterValidator(Protocol):
-    """A `@model_validator` decorated function signature. This is used when `mode='after'`."""
-
-    @staticmethod
-    def __call__(  # noqa: D102
-        self: _ModelType,  # type: ignore
-        __info: _core_schema.ValidationInfo,
-    ) -> _ModelType:
-        ...
-
+ModelAfterValidator = Callable[[_ModelType, _core_schema.ValidationInfo], _ModelType]
+"""A `@model_validator` decorated function signature. This is used when `mode='after'`."""
 
 _AnyModelWrapValidator = Union[ModelWrapValidator, ModelWrapValidatorWithoutInfo]
 _AnyModeBeforeValidator = Union[ModelBeforeValidator, ModelBeforeValidatorWithoutInfo]
-_AnyModeAfterValidator = Union[ModelAfterValidator, ModelAfterValidatorWithoutInfo]
+_AnyModelAfterValidator = Union[ModelAfterValidator[_ModelType], ModelAfterValidatorWithoutInfo[_ModelType]]
 
 
 @overload
@@ -457,7 +444,9 @@ def model_validator(
 def model_validator(
     *,
     mode: Literal['after'],
-) -> Callable[[_AnyModeAfterValidator], _decorators.PydanticDescriptorProxy[_decorators.ModelValidatorDecoratorInfo]]:
+) -> Callable[
+    [_AnyModelAfterValidator[_ModelType]], _decorators.PydanticDescriptorProxy[_decorators.ModelValidatorDecoratorInfo]
+]:
     ...
 
 
@@ -493,7 +482,7 @@ if TYPE_CHECKING:
 
 else:
 
-    @_internal_dataclass.slots_dataclass
+    @dataclasses.dataclass(**_internal_dataclass.slots_true)
     class InstanceOf:
         '''Generic type for annotating a type that is an instance of a given class.
 
@@ -556,7 +545,7 @@ if TYPE_CHECKING:
     SkipValidation = Annotated[AnyType, ...]  # SkipValidation[list[str]] will be treated by type checkers as list[str]
 else:
 
-    @_internal_dataclass.slots_dataclass
+    @dataclasses.dataclass(**_internal_dataclass.slots_true)
     class SkipValidation:
         """If this is applied as an annotation (e.g., via `x: Annotated[int, SkipValidation]`), validation will be
             skipped. You can also use `SkipValidation[int]` as a shorthand for `Annotated[int, SkipValidation]`.

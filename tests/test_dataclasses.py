@@ -1,4 +1,5 @@
 import dataclasses
+import inspect
 import pickle
 import re
 import sys
@@ -1748,9 +1749,9 @@ def test_model_validator_after():
         b: float
 
         @model_validator(mode='after')
-        def double_b(cls, dc: 'MyDataclass'):
-            dc.b *= 2
-            return dc
+        def double_b(self) -> 'MyDataclass':
+            self.b *= 2
+            return self
 
     d = MyDataclass('1', b='2')
     assert d.a == 1
@@ -1985,7 +1986,7 @@ def test_dataclass_config_validate_default():
         ValidatingModel()
     assert exc_info.value.errors(include_url=False) == [
         {
-            'ctx': {'error': 'assert -1 > 0'},
+            'ctx': {'error': HasRepr(repr(AssertionError('assert -1 > 0')))},
             'input': -1,
             'loc': ('x',),
             'msg': 'Assertion failed, assert -1 > 0',
@@ -2400,3 +2401,41 @@ def test_combined_field_annotations():
             'type': 'greater_than',
         }
     ]
+
+
+def test_dataclass_field_default_factory_with_init():
+    @pydantic.dataclasses.dataclass
+    class Model:
+        x: int = dataclasses.field(default_factory=lambda: 3, init=False)
+
+    assert Model().x == 3
+
+
+def test_metadata():
+    @dataclasses.dataclass
+    class Test:
+        value: int = dataclasses.field(metadata={'info': 'Some int value', 'json_schema_extra': {'a': 'b'}})
+
+    PydanticTest = pydantic.dataclasses.dataclass(Test)
+
+    assert TypeAdapter(PydanticTest).json_schema() == {
+        'properties': {'value': {'a': 'b', 'title': 'Value', 'type': 'integer'}},
+        'required': ['value'],
+        'title': 'Test',
+        'type': 'object',
+    }
+
+
+def test_signature():
+    @pydantic.dataclasses.dataclass
+    class Model:
+        x: int
+        y: str = 'y'
+        z: float = dataclasses.field(default=1.0)
+        a: float = dataclasses.field(default_factory=float)
+        b: float = Field(default=1.0)
+        c: float = Field(default_factory=float)
+
+    assert str(inspect.signature(Model)) == (
+        "(x: int, y: str = 'y', z: float = 1.0, a: float = <factory>, b: float = 1.0, c: float = <factory>) -> None"
+    )

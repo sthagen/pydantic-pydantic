@@ -102,7 +102,7 @@ from pydantic import (
 )
 from pydantic.errors import PydanticSchemaGenerationError
 from pydantic.functional_validators import AfterValidator
-from pydantic.types import AllowInfNan, GetPydanticSchema, ImportString, Strict
+from pydantic.types import AllowInfNan, GetPydanticSchema, ImportString, Strict, StringConstraints
 
 try:
     import email_validator
@@ -139,19 +139,26 @@ def test_strict_raw_type():
         Model(v=b'fo')
 
 
-def test_constrained_bytes_too_long(ConBytesModel):
-    with pytest.raises(ValidationError) as exc_info:
-        ConBytesModel(v=b'this is too long')
-    # insert_assert(exc_info.value.errors(include_url=False))
-    assert exc_info.value.errors(include_url=False) == [
-        {
-            'type': 'bytes_too_long',
-            'loc': ('v',),
-            'msg': 'Data should have at most 10 bytes',
-            'input': b'this is too long',
-            'ctx': {'max_length': 10},
-        }
-    ]
+@pytest.mark.parametrize(
+    ('data', 'valid'),
+    [(b'this is too long', False), ('⪶⓲⽷01'.encode(), False), (b'not long90', True), ('⪶⓲⽷0'.encode(), True)],
+)
+def test_constrained_bytes_too_long(ConBytesModel, data: bytes, valid: bool):
+    if valid:
+        assert ConBytesModel(v=data).model_dump() == {'v': data}
+    else:
+        with pytest.raises(ValidationError) as exc_info:
+            ConBytesModel(v=data)
+        # insert_assert(exc_info.value.errors(include_url=False))
+        assert exc_info.value.errors(include_url=False) == [
+            {
+                'ctx': {'max_length': 10},
+                'input': data,
+                'loc': ('v',),
+                'msg': 'Data should have at most 10 bytes',
+                'type': 'bytes_too_long',
+            }
+        ]
 
 
 def test_constrained_bytes_strict_true():
@@ -723,19 +730,26 @@ def test_constrained_str_default(ConStringModel):
     assert m.v == 'foobar'
 
 
-def test_constrained_str_too_long(ConStringModel):
-    with pytest.raises(ValidationError) as exc_info:
-        ConStringModel(v='this is too long')
-    # insert_assert(exc_info.value.errors(include_url=False))
-    assert exc_info.value.errors(include_url=False) == [
-        {
-            'type': 'string_too_long',
-            'loc': ('v',),
-            'msg': 'String should have at most 10 characters',
-            'input': 'this is too long',
-            'ctx': {'max_length': 10},
-        }
-    ]
+@pytest.mark.parametrize(
+    ('data', 'valid'),
+    [('this is too long', False), ('⛄' * 11, False), ('not long90', True), ('⛄' * 10, True)],
+)
+def test_constrained_str_too_long(ConStringModel, data, valid):
+    if valid:
+        assert ConStringModel(v=data).model_dump() == {'v': data}
+    else:
+        with pytest.raises(ValidationError) as exc_info:
+            ConStringModel(v=data)
+        # insert_assert(exc_info.value.errors(include_url=False))
+        assert exc_info.value.errors(include_url=False) == [
+            {
+                'ctx': {'max_length': 10},
+                'input': data,
+                'loc': ('v',),
+                'msg': 'String should have at most 10 characters',
+                'type': 'string_too_long',
+            }
+        ]
 
 
 @pytest.mark.parametrize(
@@ -1026,12 +1040,15 @@ def test_decimal_strict():
 
     with pytest.raises(ValidationError) as exc_info:
         Model(v=1.23)
+
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
-            'type': 'decimal_type',
+            'type': 'is_instance_of',
             'loc': ('v',),
-            'msg': 'Input should be a valid Decimal instance or decimal string in JSON',
+            'msg': 'Input should be an instance of Decimal',
             'input': 1.23,
+            'ctx': {'class': 'Decimal'},
         }
     ]
 
@@ -1275,7 +1292,7 @@ class BoolCastable:
         ('uuid_check', b'\x12\x34\x56\x78' * 4, UUID('12345678-1234-5678-1234-567812345678')),
         ('uuid_check', 'ebcdab58-6eb8-46fb-a190-', ValidationError),
         ('uuid_check', 123, ValidationError),
-        ('decimal_check', 42.24, Decimal('42.24')),
+        ('decimal_check', 42.24, Decimal(42.24)),
         ('decimal_check', '42.24', Decimal('42.24')),
         ('decimal_check', b'42.24', ValidationError),
         ('decimal_check', '  42.24  ', Decimal('42.24')),
@@ -1302,18 +1319,18 @@ class BoolCastable:
         ('datetime_check', '2017-05-05 10:10:10', datetime(2017, 5, 5, 10, 10, 10)),
         ('datetime_check', '2017-05-05 10:10:10+00:00', datetime(2017, 5, 5, 10, 10, 10, tzinfo=timezone.utc)),
         ('datetime_check', b'2017-05-05T10:10:10.0002', datetime(2017, 5, 5, 10, 10, 10, microsecond=200)),
-        ('datetime_check', 1493979010000, datetime(2017, 5, 5, 10, 10, 10)),
-        ('datetime_check', 1493979010, datetime(2017, 5, 5, 10, 10, 10)),
-        ('datetime_check', 1493979010000.0, datetime(2017, 5, 5, 10, 10, 10)),
-        ('datetime_check', Decimal(1493979010), datetime(2017, 5, 5, 10, 10, 10)),
+        ('datetime_check', 1493979010000, datetime(2017, 5, 5, 10, 10, 10, tzinfo=timezone.utc)),
+        ('datetime_check', 1493979010, datetime(2017, 5, 5, 10, 10, 10, tzinfo=timezone.utc)),
+        ('datetime_check', 1493979010000.0, datetime(2017, 5, 5, 10, 10, 10, tzinfo=timezone.utc)),
+        ('datetime_check', Decimal(1493979010), datetime(2017, 5, 5, 10, 10, 10, tzinfo=timezone.utc)),
         ('datetime_check', '2017-5-5T10:10:10', ValidationError),
         ('datetime_check', b'2017-5-5T10:10:10', ValidationError),
         ('time_check', time(10, 10, 10), time(10, 10, 10)),
         ('time_check', '10:10:10.0002', time(10, 10, 10, microsecond=200)),
         ('time_check', b'10:10:10.0002', time(10, 10, 10, microsecond=200)),
-        ('time_check', 3720, time(1, 2)),
-        ('time_check', 3720.0002, time(1, 2, microsecond=200)),
-        ('time_check', Decimal(3720.0002), time(1, 2, microsecond=200)),
+        ('time_check', 3720, time(1, 2, tzinfo=timezone.utc)),
+        ('time_check', 3720.0002, time(1, 2, microsecond=200, tzinfo=timezone.utc)),
+        ('time_check', Decimal(3720.0002), time(1, 2, microsecond=200, tzinfo=timezone.utc)),
         ('time_check', '1:1:1', ValidationError),
         ('time_check', b'1:1:1', ValidationError),
         ('time_check', -1, ValidationError),
@@ -2599,15 +2616,20 @@ def test_strict_int():
         Model(v=True)
 
 
-def test_int_parsing_size_error():
-    i64_max = 9_223_372_036_854_775_807
+@pytest.mark.parametrize(
+    ('input', 'expected_json'),
+    (
+        (9_223_372_036_854_775_807, b'9223372036854775807'),
+        (-9_223_372_036_854_775_807, b'-9223372036854775807'),
+        (1433352099889938534014333520998899385340, b'1433352099889938534014333520998899385340'),
+        (-1433352099889938534014333520998899385340, b'-1433352099889938534014333520998899385340'),
+    ),
+)
+def test_big_int_json(input, expected_json):
     v = TypeAdapter(int)
-
-    with pytest.raises(
-        ValidationError,
-        match=r'Unable to parse input string as an integer, exceeded maximum size \[type=int_parsing_size,',
-    ):
-        v.validate_json(json.dumps(-i64_max * 2))
+    dumped = v.dump_json(input)
+    assert dumped == expected_json
+    assert v.validate_json(dumped) == input
 
 
 def test_strict_float():
@@ -2889,7 +2911,7 @@ ANY_THING = object()
                     'loc': ('foo',),
                     'msg': 'Input should be greater than 42.24',
                     'input': Decimal('42'),
-                    'ctx': {'gt': 42.24},
+                    'ctx': {'gt': '42.24'},
                 }
             ],
         ),
@@ -2904,7 +2926,7 @@ ANY_THING = object()
                     'msg': 'Input should be less than 42.24',
                     'input': Decimal('43'),
                     'ctx': {
-                        'lt': 42.24,
+                        'lt': '42.24',
                     },
                 },
             ],
@@ -2921,7 +2943,7 @@ ANY_THING = object()
                     'msg': 'Input should be greater than or equal to 42.24',
                     'input': Decimal('42'),
                     'ctx': {
-                        'ge': 42.24,
+                        'ge': '42.24',
                     },
                 }
             ],
@@ -2938,7 +2960,7 @@ ANY_THING = object()
                     'msg': 'Input should be less than or equal to 42.24',
                     'input': Decimal('43'),
                     'ctx': {
-                        'le': 42.24,
+                        'le': '42.24',
                     },
                 }
             ],
@@ -3067,7 +3089,7 @@ ANY_THING = object()
             Decimal('42'),
             [
                 {
-                    'type': 'decimal_multiple_of',
+                    'type': 'multiple_of',
                     'loc': ('foo',),
                     'msg': 'Input should be a multiple of 5',
                     'input': Decimal('42'),
@@ -5069,8 +5091,15 @@ def test_handle_3rd_party_custom_type_reusing_known_metadata() -> None:
     assert isinstance(Model(x=1).x, PdDecimal)
     with pytest.raises(ValidationError) as exc_info:
         Model(x=-1)
+    # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {'type': 'greater_than', 'loc': ('x',), 'msg': 'Input should be greater than 0', 'input': -1, 'ctx': {'gt': 0}}
+        {
+            'type': 'greater_than',
+            'loc': ('x',),
+            'msg': 'Input should be greater than 0',
+            'input': -1,
+            'ctx': {'gt': '0'},
+        }
     ]
 
 
@@ -5536,3 +5565,10 @@ def test_get_pydantic_core_schema_marker_unrelated_type() -> None:
     ta = TypeAdapter(Annotated[int, Marker(2), Marker(3)])
 
     assert ta.validate_python('1') == 3
+
+
+def test_string_constraints() -> None:
+    ta = TypeAdapter(
+        Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True), AfterValidator(lambda x: x * 2)]
+    )
+    assert ta.validate_python(' ABC ') == 'abcabc'

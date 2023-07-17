@@ -10,7 +10,8 @@ on:
 
 env:
   COLUMNS: 150
-  PDM_DEPS: 'urllib3<2'
+  PDM_DEPS: 'urllib3<2,git+https://github.com/adriangb/findpython.git@version-timeout-env'
+  FINDPYTHON_GET_VERSION_TIMEOUT: 30
 
 jobs:
   lint:
@@ -30,14 +31,15 @@ jobs:
           version: 2.7.0
 
       - name: install
-        run: pdm install -G linting -G email
+        run: |
+          pdm use -f $PYTHON
+          pdm install -G linting -G email
 
       - uses: pre-commit/action@v3.0.0
         with:
           extra_args: --all-files --verbose
-
-      - name: make history
-        run: pdm run python3 ./changes/make_history.py
+        env:
+          SKIP: no-commit-to-branch
 
   docs-build:
     runs-on: ubuntu-latest
@@ -52,7 +54,9 @@ jobs:
         version: 2.7.0
 
     - name: install dependencies
-      run: pdm install -G docs
+      run: |
+        pdm use -f $PYTHON
+        pdm install -G docs
 
     - run: pdm run python -c 'import docs.plugins.main'
     - run: pdm run mkdocs build
@@ -71,6 +75,7 @@ jobs:
 
       - name: install deps
         run: |
+          pdm use -f $PYTHON
           pdm install -G testing -G testing-extra -G email -G memray
           pdm add pytest-memray
 
@@ -108,11 +113,12 @@ jobs:
     - uses: pdm-project/setup-pdm@v3
       with:
         python-version: ${{ matrix.python-version }}
-        cache: true
         version: 2.7.0
 
     - name: install deps
-      run: pdm install -G testing
+      run: |
+        pdm use -f $PYTHON
+        pdm install -G testing
 
     - run: pdm info && pdm list
 
@@ -174,6 +180,7 @@ jobs:
 
     - name: install deps
       run: |
+        pdm use -f $PYTHON
         pdm install -G testing -G mypy
 
     - name: install mypy
@@ -266,12 +273,13 @@ jobs:
 
     - name: install deps
       run: |
+        pdm use -f $PYTHON
         pdm install -G testing -G email
 
     - name: install typing-extensions
       run: |
         if [ ${{ matrix.typing-extensions-version }} == 'main' ]; then
-          pdm remove typing-extensions && pip install 'git+https://github.com/python/typing_extensions.git'
+          pdm remove typing-extensions && pdm add 'typing-extensions @ git+https://github.com/python/typing_extensions.git ; python_version >= "3.8"'
         else
           pdm remove typing-extensions && pdm add 'typing-extensions==${{ matrix.typing-extensions-version }}'
         fi

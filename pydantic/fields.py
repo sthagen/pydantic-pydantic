@@ -227,7 +227,7 @@ class FieldInfo(_repr.Representation):
             import pydantic
 
             class MyModel(pydantic.BaseModel):
-                foo: int = pydantic.Field(4, ...)
+                foo: int = pydantic.Field(4)
             ```
         """
         if 'annotation' in kwargs:
@@ -249,6 +249,7 @@ class FieldInfo(_repr.Representation):
 
             ```python
             import pydantic
+
             class MyModel(pydantic.BaseModel):
                 foo: int  # <-- like this
             ```
@@ -257,11 +258,14 @@ class FieldInfo(_repr.Representation):
             one of the (not first) arguments in `Annotated` are an instance of `FieldInfo`, e.g.:
 
             ```python
-            import pydantic, annotated_types, typing
+            import annotated_types
+            from typing_extensions import Annotated
+
+            import pydantic
 
             class MyModel(pydantic.BaseModel):
-                foo: typing.Annotated[int, annotated_types.Gt(42)]
-                bar: typing.Annotated[int, Field(gt=42)]
+                foo: Annotated[int, annotated_types.Gt(42)]
+                bar: Annotated[int, pydantic.Field(gt=42)]
             ```
 
         """
@@ -298,12 +302,15 @@ class FieldInfo(_repr.Representation):
 
         Example:
             ```python
-            import pydantic, annotated_types, typing
+            import annotated_types
+            from typing_extensions import Annotated
+
+            import pydantic
 
             class MyModel(pydantic.BaseModel):
                 foo: int = 4  # <-- like this
-                bar: typing.Annotated[int, annotated_types.Gt(4)] = 4  # <-- or this
-                spam: typing.Annotated[int, pydantic.Field(gt=4)] = 4  # <-- or this
+                bar: Annotated[int, annotated_types.Gt(4)] = 4  # <-- or this
+                spam: Annotated[int, pydantic.Field(gt=4)] = 4  # <-- or this
             ```
         """
         final = False
@@ -381,7 +388,8 @@ class FieldInfo(_repr.Representation):
             default_factory = dc_field.default_factory
 
         # use the `Field` function so in correct kwargs raise the correct `TypeError`
-        field = Field(default=default, default_factory=default_factory, repr=dc_field.repr, **dc_field.metadata)
+        dc_field_metadata = {k: v for k, v in dc_field.metadata.items() if k in _FIELD_ARG_NAMES}
+        field = Field(default=default, default_factory=default_factory, repr=dc_field.repr, **dc_field_metadata)
 
         field.annotation, annotation_metadata = cls._extract_metadata(dc_field.type)
         field.metadata += annotation_metadata
@@ -536,7 +544,7 @@ class FieldInfo(_repr.Representation):
                     yield s, value
 
 
-@_internal_dataclass.slots_dataclass
+@dataclasses.dataclass(**_internal_dataclass.slots_true)
 class AliasPath:
     """usage docs: https://docs.pydantic.dev/dev-v2/usage/fields#aliaspath-and-aliaschoices
 
@@ -560,7 +568,7 @@ class AliasPath:
         return self.path
 
 
-@_internal_dataclass.slots_dataclass
+@dataclasses.dataclass(**_internal_dataclass.slots_true)
 class AliasChoices:
     """usage docs: https://docs.pydantic.dev/dev-v2/usage/fields#aliaspath-and-aliaschoices
 
@@ -801,6 +809,10 @@ def Field(  # noqa: C901
     )
 
 
+_FIELD_ARG_NAMES = set(inspect.signature(Field).parameters)
+_FIELD_ARG_NAMES.remove('extra')  # do not include the varkwargs parameter
+
+
 class ModelPrivateAttr(_repr.Representation):
     """A descriptor for private attributes in class models.
 
@@ -818,14 +830,17 @@ class ModelPrivateAttr(_repr.Representation):
         self.default = default
         self.default_factory = default_factory
 
-    def __getattr__(self, item: str) -> Any:
-        """This function improves compatibility with custom descriptors by ensuring delegation happens
-        as expected when the default value of a private attribute is a descriptor.
-        """
-        if item in {'__get__', '__set__', '__delete__'}:
-            if hasattr(self.default, item):
-                return getattr(self.default, item)
-        raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+    if not typing.TYPE_CHECKING:
+        # We put `__getattr__` in a non-TYPE_CHECKING block because otherwise, mypy allows arbitrary attribute access
+
+        def __getattr__(self, item: str) -> Any:
+            """This function improves compatibility with custom descriptors by ensuring delegation happens
+            as expected when the default value of a private attribute is a descriptor.
+            """
+            if item in {'__get__', '__set__', '__delete__'}:
+                if hasattr(self.default, item):
+                    return getattr(self.default, item)
+            raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
 
     def __set_name__(self, cls: type[Any], name: str) -> None:
         """Preserve `__set_name__` protocol defined in https://peps.python.org/pep-0487."""
@@ -888,7 +903,7 @@ def PrivateAttr(
     )
 
 
-@_internal_dataclass.slots_dataclass
+@dataclasses.dataclass(**_internal_dataclass.slots_true)
 class ComputedFieldInfo:
     """A container for data from `@computed_field` so that we can access it while building the pydantic-core schema.
 
@@ -905,7 +920,7 @@ class ComputedFieldInfo:
 
     decorator_repr: ClassVar[str] = '@computed_field'
     wrapped_property: property
-    return_type: type[Any]
+    return_type: Any
     alias: str | None
     alias_priority: int | None
     title: str | None
@@ -921,7 +936,7 @@ PropertyT = typing.TypeVar('PropertyT')
 @typing.overload
 def computed_field(
     *,
-    return_type: Any = None,
+    return_type: Any = PydanticUndefined,
     alias: str | None = None,
     alias_priority: int | None = None,
     title: str | None = None,
@@ -944,7 +959,7 @@ def computed_field(
     title: str | None = None,
     description: str | None = None,
     repr: bool = True,
-    return_type: Any = None,
+    return_type: Any = PydanticUndefined,
 ) -> PropertyT | typing.Callable[[PropertyT], PropertyT]:
     """Decorator to include `property` and `cached_property` when serializing models.
 
@@ -972,16 +987,9 @@ def computed_field(
 
     def dec(f: Any) -> Any:
         nonlocal description, return_type, alias_priority
-        if description is None and f.__doc__:
-            description = inspect.cleandoc(f.__doc__)
-
-        return_type = _decorators.get_function_return_type(f, return_type)
-        if return_type is None:
-            raise PydanticUserError(
-                'Computed field is missing return type annotation or specifying `return_type`'
-                ' to the `@computed_field` decorator (e.g. `@computed_field(return_type=int|str)`)',
-                code='model-field-missing-annotation',
-            )
+        unwrapped = _decorators.unwrap_wrapped_function(f)
+        if description is None and unwrapped.__doc__:
+            description = inspect.cleandoc(unwrapped.__doc__)
 
         # if the function isn't already decorated with `@property` (or another descriptor), then we wrap it now
         f = _decorators.ensure_property(f)
