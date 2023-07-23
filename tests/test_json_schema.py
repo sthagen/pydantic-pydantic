@@ -62,6 +62,7 @@ from pydantic.json_schema import (
     GenerateJsonSchema,
     JsonSchemaValue,
     PydanticJsonSchemaWarning,
+    SkipJsonSchema,
     model_json_schema,
     models_json_schema,
 )
@@ -1078,14 +1079,19 @@ def test_json_type():
         c: Json[Any]
 
     assert Model.model_json_schema() == {
-        'title': 'Model',
-        'type': 'object',
         'properties': {
-            'a': {'title': 'A', 'type': 'string', 'format': 'json-string'},
-            'b': {'title': 'B', 'type': 'string', 'format': 'json-string'},
-            'c': {'title': 'C', 'type': 'string', 'format': 'json-string'},
+            'a': {'contentMediaType': 'application/json', 'contentSchema': {}, 'title': 'A', 'type': 'string'},
+            'b': {
+                'contentMediaType': 'application/json',
+                'contentSchema': {'type': 'integer'},
+                'title': 'B',
+                'type': 'string',
+            },
+            'c': {'contentMediaType': 'application/json', 'contentSchema': {}, 'title': 'C', 'type': 'string'},
         },
         'required': ['a', 'b', 'c'],
+        'title': 'Model',
+        'type': 'object',
     }
     assert Model.model_json_schema(mode='serialization') == {
         'properties': {'a': {'title': 'A'}, 'b': {'title': 'B', 'type': 'integer'}, 'c': {'title': 'C'}},
@@ -4308,7 +4314,14 @@ def test_serialization_validation_interaction():
     assert v_schema == {
         '$defs': {
             'Inner': {
-                'properties': {'x': {'format': 'json-string', 'title': 'X', 'type': 'string'}},
+                'properties': {
+                    'x': {
+                        'contentMediaType': 'application/json',
+                        'contentSchema': {'type': 'integer'},
+                        'title': 'X',
+                        'type': 'string',
+                    }
+                },
                 'required': ['x'],
                 'title': 'Inner',
                 'type': 'object',
@@ -4344,7 +4357,14 @@ def test_serialization_validation_interaction():
     assert vs_schema == {
         '$defs': {
             'InnerInput': {
-                'properties': {'x': {'format': 'json-string', 'title': 'X', 'type': 'string'}},
+                'properties': {
+                    'x': {
+                        'contentMediaType': 'application/json',
+                        'contentSchema': {'type': 'integer'},
+                        'title': 'X',
+                        'type': 'string',
+                    }
+                },
                 'required': ['x'],
                 'title': 'Inner',
                 'type': 'object',
@@ -4835,6 +4855,25 @@ def test_examples_annotation() -> None:
     }
 
 
+def test_skip_json_schema_annotation() -> None:
+    class Model(BaseModel):
+        x: Union[int, SkipJsonSchema[None]] = None
+        y: Union[int, SkipJsonSchema[None]] = 1
+        z: Union[int, SkipJsonSchema[str]] = 'foo'
+
+    assert Model(y=None).y is None
+    # insert_assert(Model.model_json_schema())
+    assert Model.model_json_schema() == {
+        'properties': {
+            'x': {'default': None, 'title': 'X', 'type': 'integer'},
+            'y': {'default': 1, 'title': 'Y', 'type': 'integer'},
+            'z': {'default': 'foo', 'title': 'Z', 'type': 'integer'},
+        },
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
 def test_typeddict_field_required_missing() -> None:
     """https://github.com/pydantic/pydantic/issues/6192"""
 
@@ -5072,3 +5111,41 @@ def test_dollar_ref_alias():
         'title': 'MyModel',
         'type': 'object',
     }
+
+
+def test_multiple_parametrization_of_generic_model() -> None:
+    """https://github.com/pydantic/pydantic/issues/6708"""
+    T = TypeVar('T')
+
+    calls = 0
+
+    class Inner(BaseModel):
+        a: int
+
+        @classmethod
+        def __get_pydantic_json_schema__(
+            cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+        ) -> JsonSchemaValue:
+            nonlocal calls
+            calls += 1
+            json_schema = handler(core_schema)
+            return json_schema
+
+    class Outer(BaseModel, Generic[T]):
+        b: Optional[T]
+
+    class ModelTest(BaseModel):
+        c: Outer[Inner]
+
+    for _ in range(sys.getrecursionlimit() + 1):
+
+        class ModelTest(BaseModel):  # noqa: F811
+            c: Outer[Inner]
+
+    ModelTest.model_json_schema()
+
+    # this is not necessarily a promise we make
+    # (in fact, we've had bugs in the past where this was not the case and we'd
+    # call the __get_pydantic_json_schema__ method multiple times)
+    # but it's much easier to test for than absence of a recursion limit
+    assert calls == 1
