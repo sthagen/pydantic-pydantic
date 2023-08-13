@@ -49,6 +49,7 @@ from pydantic import (
     ValidationError,
     WithJsonSchema,
     computed_field,
+    field_serializer,
     field_validator,
 )
 from pydantic._internal._core_metadata import CoreMetadataHandler, build_metadata_dict
@@ -2673,16 +2674,16 @@ class NestedModel(BaseModel):
     )
     model_names = set(schema['$defs'].keys())
     expected_model_names = {
-        'ModelOneInput',
-        'ModelOneOutput',
-        'ModelTwoInput',
-        'ModelTwoOutput',
-        f'{module.__name__}__ModelOne__NestedModelInput',
-        f'{module.__name__}__ModelOne__NestedModelOutput',
-        f'{module.__name__}__ModelTwo__NestedModelInput',
-        f'{module.__name__}__ModelTwo__NestedModelOutput',
-        f'{module.__name__}__NestedModelInput',
-        f'{module.__name__}__NestedModelOutput',
+        'ModelOne-Input',
+        'ModelOne-Output',
+        'ModelTwo-Input',
+        'ModelTwo-Output',
+        f'{module.__name__}__ModelOne__NestedModel-Input',
+        f'{module.__name__}__ModelOne__NestedModel-Output',
+        f'{module.__name__}__ModelTwo__NestedModel-Input',
+        f'{module.__name__}__ModelTwo__NestedModel-Output',
+        f'{module.__name__}__NestedModel-Input',
+        f'{module.__name__}__NestedModel-Output',
     }
     assert model_names == expected_model_names
 
@@ -2736,6 +2737,167 @@ class MyModel(BaseModel):
         f'{module_1.__name__}__MyModel',
         f'{module_2.__name__}__MyEnum',
         f'{module_2.__name__}__MyModel',
+    }
+
+
+def test_mode_name_causes_no_conflict():
+    class Organization(BaseModel):
+        pass
+
+    class OrganizationInput(BaseModel):
+        pass
+
+    class OrganizationOutput(BaseModel):
+        pass
+
+    class Model(BaseModel):
+        # Ensure the validation and serialization schemas are different:
+        x: Organization = Field(validation_alias='x_validation', serialization_alias='x_serialization')
+        y: OrganizationInput
+        z: OrganizationOutput
+
+    assert Model.model_json_schema(mode='validation') == {
+        '$defs': {
+            'Organization': {'properties': {}, 'title': 'Organization', 'type': 'object'},
+            'OrganizationInput': {'properties': {}, 'title': 'OrganizationInput', 'type': 'object'},
+            'OrganizationOutput': {'properties': {}, 'title': 'OrganizationOutput', 'type': 'object'},
+        },
+        'properties': {
+            'x_validation': {'$ref': '#/$defs/Organization'},
+            'y': {'$ref': '#/$defs/OrganizationInput'},
+            'z': {'$ref': '#/$defs/OrganizationOutput'},
+        },
+        'required': ['x_validation', 'y', 'z'],
+        'title': 'Model',
+        'type': 'object',
+    }
+    assert Model.model_json_schema(mode='serialization') == {
+        '$defs': {
+            'Organization': {'properties': {}, 'title': 'Organization', 'type': 'object'},
+            'OrganizationInput': {'properties': {}, 'title': 'OrganizationInput', 'type': 'object'},
+            'OrganizationOutput': {'properties': {}, 'title': 'OrganizationOutput', 'type': 'object'},
+        },
+        'properties': {
+            'x_serialization': {'$ref': '#/$defs/Organization'},
+            'y': {'$ref': '#/$defs/OrganizationInput'},
+            'z': {'$ref': '#/$defs/OrganizationOutput'},
+        },
+        'required': ['x_serialization', 'y', 'z'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+def test_ref_conflict_resolution_without_mode_difference():
+    class OrganizationInput(BaseModel):
+        pass
+
+    class Organization(BaseModel):
+        x: int
+
+    schema_with_defs, defs = GenerateJsonSchema().generate_definitions(
+        [
+            (Organization, 'validation', Organization.__pydantic_core_schema__),
+            (Organization, 'serialization', Organization.__pydantic_core_schema__),
+            (OrganizationInput, 'validation', OrganizationInput.__pydantic_core_schema__),
+        ]
+    )
+    assert schema_with_defs == {
+        (Organization, 'serialization'): {'$ref': '#/$defs/Organization'},
+        (Organization, 'validation'): {'$ref': '#/$defs/Organization'},
+        (OrganizationInput, 'validation'): {'$ref': '#/$defs/OrganizationInput'},
+    }
+
+    assert defs == {
+        'OrganizationInput': {'properties': {}, 'title': 'OrganizationInput', 'type': 'object'},
+        'Organization': {
+            'properties': {'x': {'title': 'X', 'type': 'integer'}},
+            'required': ['x'],
+            'title': 'Organization',
+            'type': 'object',
+        },
+    }
+
+
+def test_ref_conflict_resolution_with_mode_difference():
+    class OrganizationInput(BaseModel):
+        pass
+
+    class Organization(BaseModel):
+        x: int
+
+        @field_serializer('x')
+        def serialize_x(self, v: int) -> str:
+            return str(v)
+
+    schema_with_defs, defs = GenerateJsonSchema().generate_definitions(
+        [
+            (Organization, 'validation', Organization.__pydantic_core_schema__),
+            (Organization, 'serialization', Organization.__pydantic_core_schema__),
+            (OrganizationInput, 'validation', OrganizationInput.__pydantic_core_schema__),
+        ]
+    )
+    assert schema_with_defs == {
+        (Organization, 'serialization'): {'$ref': '#/$defs/Organization-Output'},
+        (Organization, 'validation'): {'$ref': '#/$defs/Organization-Input'},
+        (OrganizationInput, 'validation'): {'$ref': '#/$defs/OrganizationInput'},
+    }
+
+    assert defs == {
+        'OrganizationInput': {'properties': {}, 'title': 'OrganizationInput', 'type': 'object'},
+        'Organization-Input': {
+            'properties': {'x': {'title': 'X', 'type': 'integer'}},
+            'required': ['x'],
+            'title': 'Organization',
+            'type': 'object',
+        },
+        'Organization-Output': {
+            'properties': {'x': {'title': 'X', 'type': 'string'}},
+            'required': ['x'],
+            'title': 'Organization',
+            'type': 'object',
+        },
+    }
+
+
+def test_conflicting_names():
+    class Organization__Input(BaseModel):
+        pass
+
+    class Organization(BaseModel):
+        x: int
+
+        @field_serializer('x')
+        def serialize_x(self, v: int) -> str:
+            return str(v)
+
+    schema_with_defs, defs = GenerateJsonSchema().generate_definitions(
+        [
+            (Organization, 'validation', Organization.__pydantic_core_schema__),
+            (Organization, 'serialization', Organization.__pydantic_core_schema__),
+            (Organization__Input, 'validation', Organization__Input.__pydantic_core_schema__),
+        ]
+    )
+    assert schema_with_defs == {
+        (Organization, 'serialization'): {'$ref': '#/$defs/Organization-Output'},
+        (Organization, 'validation'): {'$ref': '#/$defs/Organization-Input'},
+        (Organization__Input, 'validation'): {'$ref': '#/$defs/Organization__Input'},
+    }
+
+    assert defs == {
+        'Organization__Input': {'properties': {}, 'title': 'Organization__Input', 'type': 'object'},
+        'Organization-Input': {
+            'properties': {'x': {'title': 'X', 'type': 'integer'}},
+            'required': ['x'],
+            'title': 'Organization',
+            'type': 'object',
+        },
+        'Organization-Output': {
+            'properties': {'x': {'title': 'X', 'type': 'string'}},
+            'required': ['x'],
+            'title': 'Organization',
+            'type': 'object',
+        },
     }
 
 
@@ -3731,7 +3893,6 @@ def test_discriminated_annotated_union_literal_enum():
     }
 
 
-@pytest.mark.xfail(reason='json schema generation for tagged unions is fundamentally incompatible with references')
 def test_alias_same():
     class Cat(BaseModel):
         pet_type: Literal['cat'] = Field(alias='typeOfPet')
@@ -3772,7 +3933,7 @@ def test_alias_same():
             'pet': {
                 'oneOf': [{'$ref': '#/$defs/Cat'}, {'$ref': '#/$defs/Dog'}],
                 'title': 'Pet',
-                'discriminator': 'something',
+                'discriminator': {'mapping': {'cat': '#/$defs/Cat', 'dog': '#/$defs/Dog'}, 'propertyName': 'typeOfPet'},
             },
         },
         'required': ['pet', 'number'],
@@ -4356,7 +4517,7 @@ def test_serialization_validation_interaction():
     _, vs_schema = models_json_schema([(Outer, 'validation'), (Outer, 'serialization')])
     assert vs_schema == {
         '$defs': {
-            'InnerInput': {
+            'Inner-Input': {
                 'properties': {
                     'x': {
                         'contentMediaType': 'application/json',
@@ -4369,20 +4530,20 @@ def test_serialization_validation_interaction():
                 'title': 'Inner',
                 'type': 'object',
             },
-            'InnerOutput': {
+            'Inner-Output': {
                 'properties': {'x': {'title': 'X', 'type': 'integer'}},
                 'required': ['x'],
                 'title': 'Inner',
                 'type': 'object',
             },
-            'OuterInput': {
-                'properties': {'inner': {'$ref': '#/$defs/InnerInput'}},
+            'Outer-Input': {
+                'properties': {'inner': {'$ref': '#/$defs/Inner-Input'}},
                 'required': ['inner'],
                 'title': 'Outer',
                 'type': 'object',
             },
-            'OuterOutput': {
-                'properties': {'inner': {'$ref': '#/$defs/InnerOutput'}},
+            'Outer-Output': {
+                'properties': {'inner': {'$ref': '#/$defs/Inner-Output'}},
                 'required': ['inner'],
                 'title': 'Outer',
                 'type': 'object',
@@ -4874,6 +5035,21 @@ def test_skip_json_schema_annotation() -> None:
     }
 
 
+def test_skip_json_schema_exclude_default():
+    class Model(BaseModel):
+        x: Union[int, SkipJsonSchema[None]] = Field(default=None, json_schema_extra=lambda s: s.pop('default'))
+
+    assert Model().x is None
+    # insert_assert(Model.model_json_schema())
+    assert Model.model_json_schema() == {
+        'properties': {
+            'x': {'title': 'X', 'type': 'integer'},
+        },
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
 def test_typeddict_field_required_missing() -> None:
     """https://github.com/pydantic/pydantic/issues/6192"""
 
@@ -5149,3 +5325,56 @@ def test_multiple_parametrization_of_generic_model() -> None:
     # call the __get_pydantic_json_schema__ method multiple times)
     # but it's much easier to test for than absence of a recursion limit
     assert calls == 1
+
+
+def test_callable_json_schema_extra():
+    def pop_default(s):
+        s.pop('default')
+
+    class Model(BaseModel):
+        a: int = Field(default=1, json_schema_extra=pop_default)
+        b: Annotated[int, Field(default=2), Field(json_schema_extra=pop_default)]
+        c: Annotated[int, Field(default=3)] = Field(json_schema_extra=pop_default)
+
+    assert Model().model_dump() == {'a': 1, 'b': 2, 'c': 3}
+    assert Model(a=11, b=12, c=13).model_dump() == {
+        'a': 11,
+        'b': 12,
+        'c': 13,
+    }
+
+    json_schema = Model.model_json_schema()
+    for key in 'abc':
+        assert json_schema['properties'][key] == {'title': key.upper(), 'type': 'integer'}  # default is not present
+
+
+def test_callable_json_schema_extra_dataclass():
+    def pop_default(s):
+        s.pop('default')
+
+    @pydantic.dataclasses.dataclass
+    class MyDataclass:
+        # Note that a and b here have to come first since dataclasses requires annotation-only fields to come before
+        # fields with defaults (for similar reasons to why function arguments with defaults must come later)
+        # But otherwise, evnerything seems to work properly
+        a: Annotated[int, Field(json_schema_extra=pop_default), Field(default=1)]
+        b: Annotated[int, Field(default=2), Field(json_schema_extra=pop_default)]
+        c: int = Field(default=3, json_schema_extra=pop_default)
+        d: Annotated[int, Field(json_schema_extra=pop_default)] = 4
+        e: Annotated[int, Field(json_schema_extra=pop_default)] = Field(default=5)
+        f: Annotated[int, Field(default=6)] = Field(json_schema_extra=pop_default)
+
+    adapter = TypeAdapter(MyDataclass)
+    assert adapter.dump_python(MyDataclass()) == {'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6}
+    assert adapter.dump_python(MyDataclass(a=11, b=12, c=13, d=14, e=15, f=16)) == {
+        'a': 11,
+        'b': 12,
+        'c': 13,
+        'd': 14,
+        'e': 15,
+        'f': 16,
+    }
+
+    json_schema = adapter.json_schema()
+    for key in 'abcdef':
+        assert json_schema['properties'][key] == {'title': key.upper(), 'type': 'integer'}  # default is not present

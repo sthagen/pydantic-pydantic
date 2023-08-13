@@ -1,5 +1,10 @@
-
 ## Annotated Validators
+
+??? api "API Documentation"
+    [`pydantic.functional_validators.WrapValidator`][pydantic.functional_validators.WrapValidator]<br>
+    [`pydantic.functional_validators.PlainValidator`][pydantic.functional_validators.PlainValidator]<br>
+    [`pydantic.functional_validators.BeforeValidator`][pydantic.functional_validators.BeforeValidator]<br>
+    [`pydantic.functional_validators.AfterValidator`][pydantic.functional_validators.AfterValidator]<br>
 
 Pydantic provides a way to apply validators via use of `Annotated`.
 You should use this whenever you want to bind validation to a type instead of model or field.
@@ -54,17 +59,12 @@ The same approach can be used for dict keys, etc.
 
 ### Before, After, Wrap and Plain validators
 
-Pydantic provides multiple types of validator functions.
+Pydantic provides multiple types of validator functions:
+
 * `After` validators run after Pydantic's internal parsing. They are generally more type safe and thus easier to implement.
 * `Before` validators run before Pydantic's internal parsing and validation (e.g. coercion of a `str` to an `int`). These are more flexible than `After` validators since they can modify the raw input, but they also have to deal with the raw input, which in theory could be any arbitrary object.
-* `Plain` validators are like a `mode='before'` validator but they terminate validation immediately, no further validators are called and Pydantic does not do any of it's internal validation.
+* `Plain` validators are like a `mode='before'` validator but they terminate validation immediately, no further validators are called and Pydantic does not do any of its internal validation.
 * `Wrap` validators are the most flexible of all. You can run code before or after Pydantic and other validators do their thing or you can terminate validation immediately, both with a successful value or an error.
-
-??? api "API Documentation"
-    [`pydantic.functional_validators.WrapValidator`][pydantic.functional_validators.WrapValidator]<br>
-    [`pydantic.functional_validators.PlainValidator`][pydantic.functional_validators.PlainValidator]<br>
-    [`pydantic.functional_validators.BeforeValidator`][pydantic.functional_validators.BeforeValidator]<br>
-    [`pydantic.functional_validators.AfterValidator`][pydantic.functional_validators.AfterValidator]<br>
 
 You can use multiple before, after, or `mode='wrap'` validators, but only one `PlainValidator` since a plain validator
 will not call any inner validators.

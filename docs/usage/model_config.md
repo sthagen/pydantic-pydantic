@@ -1,4 +1,8 @@
-Behaviour of _pydantic_ can be controlled via the `model_config` attribute on a `BaseModel`.
+??? api "API Documentation"
+    [`pydantic.config.ConfigDict`][pydantic.config.ConfigDict]<br>
+
+Behaviour of Pydantic can be controlled via the [`BaseModel.model_config`][pydantic.BaseModel.model_config],
+and as an argument to [`TypeAdapter`][pydantic.TypeAdapter].
 
 !!! note
     Before **v2.0**, the `Config` class was used. This is still supported, but deprecated.
@@ -240,7 +244,7 @@ print(user)
 #> name='John Doe'
 ```
 
-1. This is the the default behaviour.
+1. This is the default behaviour.
 2. The `age` argument is ignored.
 
 Instead, with `extra='allow'`, the `age` argument is included:

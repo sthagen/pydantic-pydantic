@@ -32,7 +32,7 @@ from typing import (
 import pytest
 from dirty_equals import HasRepr, IsStr
 from pydantic_core import CoreSchema, core_schema
-from typing_extensions import Annotated, Literal, OrderedDict, TypeVarTuple, Unpack, get_args
+from typing_extensions import Annotated, Literal, OrderedDict, ParamSpec, TypeVarTuple, Unpack, get_args
 
 from pydantic import (
     BaseModel,
@@ -403,6 +403,34 @@ def test_caches_get_cleaned_up_with_aliased_parametrized_bases(clean_cache):
     gc.collect(1)
     gc.collect(2)
     assert len(_GENERIC_TYPES_CACHE) < types_cache_size + _LIMITED_DICT_SIZE
+
+
+@pytest.mark.skipif(platform.python_implementation() == 'PyPy', reason='PyPy does not play nice with PyO3 gc')
+def test_circular_generic_refs_get_cleaned_up():
+    initial_cache_size = len(_GENERIC_TYPES_CACHE)
+
+    def fn():
+        T = TypeVar('T')
+        C = TypeVar('C')
+
+        class Inner(BaseModel, Generic[T, C]):
+            a: T
+            b: C
+
+        class Outer(BaseModel, Generic[C]):
+            c: Inner[int, C]
+
+        klass = Outer[str]
+        assert len(_GENERIC_TYPES_CACHE) > initial_cache_size
+        assert klass in _GENERIC_TYPES_CACHE.values()
+
+    fn()
+
+    gc.collect(0)
+    gc.collect(1)
+    gc.collect(2)
+
+    assert len(_GENERIC_TYPES_CACHE) == initial_cache_size
 
 
 def test_generics_work_with_many_parametrized_base_models(clean_cache):
@@ -1116,7 +1144,7 @@ def test_replace_types():
         assert replace_types(str | list[T] | float, {T: int}) == str | list[int] | float
 
 
-def test_replace_types_with_user_defined_generic_type_field():
+def test_replace_types_with_user_defined_generic_type_field():  # noqa: C901
     """Test that using user defined generic types as generic model fields are handled correctly."""
     T = TypeVar('T')
     KT = TypeVar('KT')
@@ -1188,10 +1216,14 @@ def test_replace_types_with_user_defined_generic_type_field():
             return core_schema.no_info_after_validator_function(cls, handler(Set[get_args(source_type)[0]]))
 
     class CustomTuple(Tuple[T]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(Tuple[get_args(source_type)[0]]))
 
     class CustomLongTuple(Tuple[T, VT]):
-        pass
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+            return core_schema.no_info_after_validator_function(cls, handler(Tuple[get_args(source_type)]))
 
     class Model(BaseModel, Generic[T, KT, VT]):
         counter_field: CustomCounter[T]
@@ -1238,8 +1270,8 @@ def test_replace_types_with_user_defined_generic_type_field():
     assert type(m.mapping_field) is dict  # this is determined in CustomMapping.__get_pydantic_core_schema__
     assert type(m.ordered_dict_field) is CustomOrderedDict
     assert type(m.set_field) is CustomSet
-    assert type(m.tuple_field) is tuple
-    assert type(m.long_tuple_field) is tuple
+    assert type(m.tuple_field) is CustomTuple
+    assert type(m.long_tuple_field) is CustomLongTuple
 
     assert m.model_dump() == {
         'counter_field': {False: 1, True: 1},
@@ -2502,3 +2534,30 @@ def test_generic_none():
 
     assert Container[type(None)](value=None).value is None
     assert Container[None](value=None).value is None
+
+
+@pytest.mark.skipif(platform.python_implementation() == 'PyPy', reason='PyPy does not allow ParamSpec in generics')
+def test_paramspec_is_usable():
+    # This used to cause a recursion error due to `P in P is True`
+    # This test doesn't actually test that ParamSpec works properly for validation or anything.
+
+    P = ParamSpec('P')
+
+    class MyGenericParamSpecClass(Generic[P]):
+        def __init__(self, func: Callable[P, None], *args: P.args, **kwargs: P.kwargs) -> None:
+            super().__init__()
+
+    class ParamSpecGenericModel(BaseModel, Generic[P]):
+        my_generic: MyGenericParamSpecClass[P]
+
+        model_config = dict(arbitrary_types_allowed=True)
+
+
+def test_parametrize_with_basemodel():
+    T = TypeVar('T')
+
+    class SimpleGenericModel(BaseModel, Generic[T]):
+        pass
+
+    class Concrete(SimpleGenericModel[BaseModel]):
+        pass

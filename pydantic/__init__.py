@@ -17,10 +17,11 @@ from ._internal._annotated_handlers import (
 from ._internal._annotated_handlers import (
     GetJsonSchemaHandler as GetJsonSchemaHandler,
 )
+from ._internal._generate_schema import GenerateSchema as GenerateSchema
 from ._migration import getattr_migration
 from .config import ConfigDict, Extra
 from .deprecated.class_validators import root_validator, validator
-from .deprecated.config import BaseConfig  # type: ignore
+from .deprecated.config import BaseConfig
 from .deprecated.tools import *
 from .errors import *
 from .fields import AliasChoices, AliasPath, Field, PrivateAttr, computed_field
@@ -192,6 +193,7 @@ __all__ = [
     # annotated handlers
     'GetCoreSchemaHandler',
     'GetJsonSchemaHandler',
+    'GenerateSchema',
 ]
 
 # A mapping of {<member name>: <module name>} defining dynamic imports

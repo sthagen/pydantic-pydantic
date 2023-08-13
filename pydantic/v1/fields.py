@@ -263,7 +263,7 @@ def Field(
       Takes same values as the ``include`` and ``exclude`` arguments on the ``.dict`` method.
     :param include: include this field while dumping.
       Takes same values as the ``include`` and ``exclude`` arguments on the ``.dict`` method.
-    :param const: this field is required and *must* take it's default value
+    :param const: this field is required and *must* take its default value
     :param gt: only applies to numbers, requires the field to be "greater than". The schema
       will have an ``exclusiveMinimum`` validation keyword
     :param ge: only applies to numbers, requires the field to be "greater than or equal to". The
@@ -943,7 +943,7 @@ class ModelField(Representation):
         elif self.shape == SHAPE_TUPLE_ELLIPSIS:
             converted = tuple(result)
         elif self.shape == SHAPE_DEQUE:
-            converted = deque(result)
+            converted = deque(result, maxlen=getattr(v, 'maxlen', None))
         elif self.shape == SHAPE_SEQUENCE:
             if isinstance(v, tuple):
                 converted = tuple(result)
@@ -952,7 +952,7 @@ class ModelField(Representation):
             elif isinstance(v, Generator):
                 converted = iter(result)
             elif isinstance(v, deque):
-                converted = deque(result)
+                converted = deque(result, maxlen=getattr(v, 'maxlen', None))
         return converted, None
 
     def _validate_iterable(

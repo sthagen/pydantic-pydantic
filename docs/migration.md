@@ -117,12 +117,9 @@ to help ease migration, but calling them will emit `DeprecationWarning`s.
     [`@computed_field`](api/fields.md#pydantic.fields.computed_field) decorators, which each address various
     shortcomings from Pydantic V1.
     * See [Custom serializers](usage/serialization.md#custom-serializers) for the usage docs of these new decorators.
-    * Due to performance overhead and implementation complexity, we have now removed support for specifying
+    * Due to performance overhead and implementation complexity, we have now deprecated support for specifying
         `json_encoders` in the model config. This functionality was originally added for the purpose of achieving custom
         serialization logic, and we think the new serialization decorators are a better choice in most common scenarios.
-        However, if your usage of `json_encoders` is not compatible with the new serialization decorators,
-        please create a GitHub issue letting us know. See [Custom data types](usage/types/custom.md) for further
-        details.
 * We have changed the behavior related to serializing subclasses of models when they occur as nested fields in a parent
   model. In V1, we would always include all fields from the subclass instance. In V2, when we dump a model, we only
   include the fields that are defined on the annotated type of the field. This helps prevent some accidental security
@@ -752,6 +749,40 @@ classes using `Annotated`.
 Inheriting from `str` had upsides and downsides, and for V2 we decided it would be better to remove this. To use these
 types in APIs which expect `str` you'll now need to convert them (with `str(url)`).
 
+### Constrained types
+
+The `Constrained*` classes were _removed_, and you should replace them by `Annotated[<type>, Field(...)]`, for example:
+
+```py test="skip"
+from pydantic import BaseModel, ConstrainedInt
+
+
+class MyInt(ConstrainedInt):
+    ge = 0
+
+
+class Model(BaseModel):
+    x: MyInt
+```
+
+...becomes:
+
+```py
+from typing_extensions import Annotated
+
+from pydantic import BaseModel, Field
+
+MyInt = Annotated[int, Field(ge=0)]
+
+
+class Model(BaseModel):
+    x: MyInt
+```
+
+Read more about it on the [Composing types via `Annotated`](../usage/types/custom/#composing-types-via-annotated) section.
+
+For `ConstrainedStr` you can use [`StringConstraints`][pydantic.types.StringConstraints] instead.
+
 ## Moved in Pydantic V2
 
 | Pydantic V1 | Pydantic V2 |
@@ -805,11 +836,15 @@ types in APIs which expect `str` you'll now need to convert them (with `str(url)
 - `pydantic.ConstrainedStr`
 - `pydantic.JsonWrapper`
 - `pydantic.NoneBytes`
+    - This was an alias to `None | bytes`.
 - `pydantic.NoneStr`
+    - This was an alias to `None | str`.
 - `pydantic.NoneStrBytes`
+    - This was an alias to `None | str | bytes`.
 - `pydantic.Protocol`
 - `pydantic.Required`
 - `pydantic.StrBytes`
+    - This was an alias to `str | bytes`.
 - `pydantic.compiled`
 - `pydantic.config.get_config`
 - `pydantic.config.inherit_config`
@@ -924,15 +959,6 @@ types in APIs which expect `str` you'll now need to convert them (with `str(url)
 - `pydantic.stricturl`
 - `pydantic.tools.parse_file_as`
 - `pydantic.tools.parse_raw_as`
-- `pydantic.types.ConstrainedBytes`
-- `pydantic.types.ConstrainedDate`
-- `pydantic.types.ConstrainedDecimal`
-- `pydantic.types.ConstrainedFloat`
-- `pydantic.types.ConstrainedFrozenSet`
-- `pydantic.types.ConstrainedInt`
-- `pydantic.types.ConstrainedList`
-- `pydantic.types.ConstrainedSet`
-- `pydantic.types.ConstrainedStr`
 - `pydantic.types.JsonWrapper`
 - `pydantic.types.NoneBytes`
 - `pydantic.types.NoneStr`

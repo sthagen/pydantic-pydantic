@@ -12,14 +12,16 @@ from typing import Any, Callable, ClassVar, Dict, FrozenSet, Generic, List, Opti
 
 import pytest
 from dirty_equals import HasRepr
-from pydantic_core import ArgsKwargs, SchemaValidator
+from pydantic_core import ArgsKwargs, CoreSchema, SchemaValidator, core_schema
 from typing_extensions import Annotated, Literal
 
 import pydantic
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     FieldValidationInfo,
+    GenerateSchema,
     PydanticDeprecatedSince20,
     PydanticUndefinedAnnotation,
     PydanticUserError,
@@ -810,7 +812,6 @@ def test_override_builtin_dataclass_2():
     assert f.seen_count == 7
 
 
-@pytest.mark.xfail(reason='Meta() is not being revalidated')
 def test_override_builtin_dataclass_nested():
     @dataclasses.dataclass
     class Meta:
@@ -2453,3 +2454,36 @@ def test_dataclasses_with_slots_and_default():
         b: int = Field(1)
 
     assert B().b == 1
+
+
+def test_schema_generator() -> None:
+    class LaxStrGenerator(GenerateSchema):
+        def str_schema(self) -> CoreSchema:
+            return core_schema.no_info_plain_validator_function(str)
+
+    @pydantic.dataclasses.dataclass
+    class Model:
+        x: str
+        __pydantic_config__ = ConfigDict(schema_generator=LaxStrGenerator)
+
+    assert Model(x=1).x == '1'
+
+
+@pytest.mark.parametrize('decorator1', **dataclass_decorators())
+def test_annotated_before_validator_called_once(decorator1):
+    count = 0
+
+    def convert(value: int) -> str:
+        nonlocal count
+        count += 1
+        return str(value)
+
+    IntToStr = Annotated[str, BeforeValidator(convert)]
+
+    @decorator1
+    class A:
+        a: IntToStr
+
+    assert count == 0
+    TypeAdapter(A).validate_python({'a': 123})
+    assert count == 1

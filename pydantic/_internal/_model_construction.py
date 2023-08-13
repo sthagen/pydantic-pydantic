@@ -3,6 +3,7 @@ from __future__ import annotations as _annotations
 
 import typing
 import warnings
+import weakref
 from abc import ABCMeta
 from functools import partial
 from types import FunctionType
@@ -49,7 +50,7 @@ IGNORED_TYPES: tuple[Any, ...] = (
 object_setattr = object.__setattr__
 
 
-class _ModelNamespaceDict(dict):  # type: ignore[type-arg]
+class _ModelNamespaceDict(dict):
     """A dictionary subclass that intercepts attribute setting on model classes and
     warns about overriding of decorators.
     """
@@ -162,8 +163,10 @@ class ModelMetaclass(ABCMeta):
                 obj.__set_name__(cls, name)
 
             if __pydantic_reset_parent_namespace__:
-                cls.__pydantic_parent_namespace__ = parent_frame_namespace()
+                cls.__pydantic_parent_namespace__ = build_lenient_weakvaluedict(parent_frame_namespace())
             parent_namespace = getattr(cls, '__pydantic_parent_namespace__', None)
+            if isinstance(parent_namespace, dict):
+                parent_namespace = unpack_lenient_weakvaluedict(parent_namespace)
 
             types_namespace = get_cls_types_namespace(cls, parent_namespace)
             set_model_fields(cls, bases, config_wrapper, types_namespace)
@@ -452,6 +455,10 @@ def complete_model_class(
         ref_mode='unpack',
     )
 
+    if config_wrapper.defer_build:
+        set_basemodel_mock_validator(cls, cls_name)
+        return False
+
     try:
         schema = cls.__get_pydantic_core_schema__(cls, handler)
     except PydanticUndefinedAnnotation as e:
@@ -465,7 +472,7 @@ def complete_model_class(
     schema = gen_schema.collect_definitions(schema)
     schema = apply_discriminators(flatten_schema_defs(schema))
     if collect_invalid_schemas(schema):
-        set_basemodel_mock_validator(cls, cls_name, 'all referenced types')
+        set_basemodel_mock_validator(cls, cls_name)
         return False
 
     # debug(schema)
@@ -560,3 +567,43 @@ def generate_model_signature(
         merged_params[var_kw_name] = var_kw.replace(name=var_kw_name)
 
     return Signature(parameters=list(merged_params.values()), return_annotation=None)
+
+
+class _PydanticWeakRef(weakref.ReferenceType):
+    pass
+
+
+def build_lenient_weakvaluedict(d: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Takes an input dictionary, and produces a new value that (invertibly) replaces the values with weakrefs.
+
+    We can't just use a WeakValueDictionary because many types (including int, str, etc.) can't be stored as values
+    in a WeakValueDictionary.
+
+    The `unpack_lenient_weakvaluedict` function can be used to reverse this operation.
+    """
+    if d is None:
+        return None
+    result = {}
+    for k, v in d.items():
+        try:
+            proxy = _PydanticWeakRef(v)
+        except TypeError:
+            proxy = v
+        result[k] = proxy
+    return result
+
+
+def unpack_lenient_weakvaluedict(d: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Inverts the transform performed by `build_lenient_weakvaluedict`."""
+    if d is None:
+        return None
+
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, _PydanticWeakRef):
+            v = v()
+            if v is not None:
+                result[k] = v
+        else:
+            result[k] = v
+    return result

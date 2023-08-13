@@ -107,7 +107,9 @@ def dataclass(
     kw_only: bool = False,
     slots: bool = False,
 ) -> Callable[[type[_T]], type[PydanticDataclass]] | type[PydanticDataclass]:
-    """A decorator used to create a Pydantic-enhanced dataclass, similar to the standard Python `dataclass`,
+    """Usage docs: https://docs.pydantic.dev/dev-v2/usage/dataclasses/
+
+    A decorator used to create a Pydantic-enhanced dataclass, similar to the standard Python `dataclass`,
     but with added validation.
 
     This function should be used similarly to `dataclasses.dataclass`.
@@ -178,7 +180,7 @@ def dataclass(
             #   If the class is generic, we need to make sure the subclass also inherits from Generic
             #   with all the same parameters.
             bases = (cls,)
-            if issubclass(cls, Generic):  # type: ignore
+            if issubclass(cls, Generic):
                 generic_base = Generic[cls.__parameters__]  # type: ignore
                 bases = bases + (generic_base,)
             cls = types.new_class(cls.__name__, bases)
@@ -224,7 +226,7 @@ if (3, 8) <= sys.version_info < (3, 11):
         """
         raise TypeError("'InitVar' object is not callable")
 
-    dataclasses.InitVar.__call__ = _call_initvar  # type: ignore
+    dataclasses.InitVar.__call__ = _call_initvar
 
 
 def rebuild_dataclass(

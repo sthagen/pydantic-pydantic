@@ -79,6 +79,7 @@ from pydantic import (
     PydanticInvalidForJsonSchema,
     SecretBytes,
     SecretStr,
+    SerializeAsAny,
     SkipValidation,
     StrictBool,
     StrictBytes,
@@ -108,6 +109,7 @@ try:
     import email_validator
 except ImportError:
     email_validator = None
+
 
 # TODO add back tests for Iterator
 
@@ -1292,7 +1294,7 @@ class BoolCastable:
         ('uuid_check', b'\x12\x34\x56\x78' * 4, UUID('12345678-1234-5678-1234-567812345678')),
         ('uuid_check', 'ebcdab58-6eb8-46fb-a190-', ValidationError),
         ('uuid_check', 123, ValidationError),
-        ('decimal_check', 42.24, Decimal(42.24)),
+        ('decimal_check', 42.24, Decimal('42.24')),
         ('decimal_check', '42.24', Decimal('42.24')),
         ('decimal_check', b'42.24', ValidationError),
         ('decimal_check', '  42.24  ', Decimal('42.24')),
@@ -1676,7 +1678,13 @@ def test_enum_from_json(enum_base, strict):
 @pytest.mark.parametrize(
     'kwargs,type_',
     [
-        ({'pattern': '^foo$'}, int),
+        pytest.param(
+            {'pattern': '^foo$'},
+            int,
+            marks=pytest.mark.xfail(
+                reason='int cannot be used with pattern but we do not currently validate that at schema build time'
+            ),
+        ),
         ({'gt': 0}, conlist(int, min_length=4)),
         ({'gt': 0}, conset(int, min_length=4)),
         ({'gt': 0}, confrozenset(int, min_length=4)),
@@ -2671,18 +2679,12 @@ def test_uuid_error():
     # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
-            'type': 'is_instance_of',
-            'loc': ('is-instance[UUID]',),
-            'msg': 'Input should be an instance of UUID',
+            'loc': (),
+            'msg': 'Input should be a valid UUID, invalid group length in group 4: expected 12, found 5',
             'input': 'ebcdab58-6eb8-46fb-a190-d07a3',
-            'ctx': {'class': 'UUID'},
-        },
-        {
+            'ctx': {'error': 'invalid group length in group 4: expected 12, found 5'},
             'type': 'uuid_parsing',
-            'loc': ('function-after[uuid_validator(), union[str,bytes]]',),
-            'msg': 'Input should be a valid UUID, unable to parse string as an UUID',
-            'input': 'ebcdab58-6eb8-46fb-a190-d07a3',
-        },
+        }
     ]
 
     not_a_valid_input_type = object()
@@ -2691,23 +2693,10 @@ def test_uuid_error():
     # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
         {
-            'type': 'is_instance_of',
-            'loc': ('is-instance[UUID]',),
-            'msg': 'Input should be an instance of UUID',
             'input': not_a_valid_input_type,
-            'ctx': {'class': 'UUID'},
-        },
-        {
-            'type': 'string_type',
-            'loc': ('function-after[uuid_validator(), union[str,bytes]]', 'str'),
-            'msg': 'Input should be a valid string',
-            'input': not_a_valid_input_type,
-        },
-        {
-            'type': 'bytes_type',
-            'loc': ('function-after[uuid_validator(), union[str,bytes]]', 'bytes'),
-            'msg': 'Input should be a valid bytes',
-            'input': not_a_valid_input_type,
+            'loc': (),
+            'msg': 'UUID input should be a string, bytes or UUID object',
+            'type': 'uuid_type',
         },
     ]
 
@@ -2760,30 +2749,30 @@ def test_uuid_validation():
         {
             'type': 'uuid_version',
             'loc': ('a',),
-            'msg': 'uuid version 1 expected',
+            'msg': 'UUID version 1 expected',
             'input': d,
-            'ctx': {'required_version': 1},
+            'ctx': {'expected_version': 1},
         },
         {
             'type': 'uuid_version',
             'loc': ('b',),
-            'msg': 'uuid version 3 expected',
+            'msg': 'UUID version 3 expected',
             'input': c,
-            'ctx': {'required_version': 3},
+            'ctx': {'expected_version': 3},
         },
         {
             'type': 'uuid_version',
             'loc': ('c',),
-            'msg': 'uuid version 4 expected',
+            'msg': 'UUID version 4 expected',
             'input': b,
-            'ctx': {'required_version': 4},
+            'ctx': {'expected_version': 4},
         },
         {
             'type': 'uuid_version',
             'loc': ('d',),
-            'msg': 'uuid version 5 expected',
+            'msg': 'UUID version 5 expected',
             'input': a,
-            'ctx': {'required_version': 5},
+            'ctx': {'expected_version': 5},
         },
     ]
 
@@ -3227,19 +3216,14 @@ def test_path_validation_fails():
         Model(foo=123)
     # insert_assert(exc_info.value.errors(include_url=False))
     assert exc_info.value.errors(include_url=False) == [
-        {
-            'type': 'is_instance_of',
-            'loc': ('foo', 'json-or-python[json=function-after[path_validator(), str],python=is-instance[Path]]'),
-            'msg': 'Input should be an instance of Path',
-            'input': 123,
-            'ctx': {'class': 'Path'},
-        },
-        {
-            'type': 'string_type',
-            'loc': ('foo', 'function-after[path_validator(), str]'),
-            'msg': 'Input should be a valid string',
-            'input': 123,
-        },
+        {'type': 'path_type', 'loc': ('foo',), 'msg': 'Input is not a valid path', 'input': 123}
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        Model(foo=None)
+    # insert_assert(exc_info.value.errors(include_url=False))
+    assert exc_info.value.errors(include_url=False) == [
+        {'type': 'path_type', 'loc': ('foo',), 'msg': 'Input is not a valid path', 'input': None}
     ]
 
 
@@ -4730,7 +4714,7 @@ def test_union_subclass(max_length: Union[int, None]):
         x: Union[int, Annotated[str, Field(max_length=max_length)]]
 
     v = Model(x=MyStr('1')).x
-    assert type(v) is MyStr
+    assert type(v) is str
     assert v == '1'
 
 
@@ -4984,7 +4968,7 @@ def test_defaultdict_unknown_default_factory() -> None:
     """
     with pytest.raises(
         PydanticSchemaGenerationError,
-        match=r'Unable to infer a default factory for with keys of type typing.DefaultDict\[int, int\]',
+        match=r'Unable to infer a default factory for keys of type typing.DefaultDict\[int, int\]',
     ):
 
         class Model(BaseModel):
@@ -5376,6 +5360,28 @@ def test_instanceof_invalid_core_schema():
         MyModel.model_json_schema()
 
 
+def test_instanceof_serialization():
+    class Inner(BaseModel):
+        pass
+
+    class SubInner(Inner):
+        x: int
+
+    class OuterStandard(BaseModel):
+        inner: InstanceOf[Inner]
+
+    assert OuterStandard(inner=SubInner(x=1)).model_dump() == {'inner': {}}
+
+    class OuterAsAny(BaseModel):
+        inner1: SerializeAsAny[InstanceOf[Inner]]
+        inner2: InstanceOf[SerializeAsAny[Inner]]
+
+    assert OuterAsAny(inner1=SubInner(x=2), inner2=SubInner(x=3)).model_dump() == {
+        'inner1': {'x': 2},
+        'inner2': {'x': 3},
+    }
+
+
 def test_constraints_arbitrary_type() -> None:
     class CustomType:
         def __init__(self, v: Any) -> None:
@@ -5423,7 +5429,7 @@ def test_constraints_arbitrary_type() -> None:
         lt=CustomType(-1),
         le=CustomType(0),
         min_length=CustomType([1, 2]),
-        max_length=CustomType([]),
+        max_length=CustomType([1]),
         multiple_of=CustomType(4),
         predicate=CustomType(1),
     )
@@ -5495,7 +5501,6 @@ def test_constraints_arbitrary_type() -> None:
             'loc': ('predicate',),
             'msg': 'Predicate test_constraints_arbitrary_type.<locals>.Model.<lambda> failed',
             'input': CustomType(-1),
-            'ctx': {},
         },
     ]
 
@@ -5615,3 +5620,14 @@ def test_string_constraints() -> None:
         Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True), AfterValidator(lambda x: x * 2)]
     )
     assert ta.validate_python(' ABC ') == 'abcabc'
+
+
+def test_decimal_float_precision() -> None:
+    """https://github.com/pydantic/pydantic/issues/6807"""
+    ta = TypeAdapter(Decimal)
+    assert ta.validate_json('1.1') == Decimal('1.1')
+    assert ta.validate_python(1.1) == Decimal('1.1')
+    assert ta.validate_json('"1.1"') == Decimal('1.1')
+    assert ta.validate_python('1.1') == Decimal('1.1')
+    assert ta.validate_json('1') == Decimal('1')
+    assert ta.validate_python(1) == Decimal('1')

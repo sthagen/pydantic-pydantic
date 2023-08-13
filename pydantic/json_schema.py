@@ -1,4 +1,11 @@
-"""The `json_schema` module contains classes and functions for generating JSON schemas."""
+"""
+The `json_schema` module contains classes and functions to allow the way [JSON Schema](https://json-schema.org/)
+is generated to be customized.
+
+In general you shouldn't need to use this module directly; instead, you can
+[`BaseModel.model_json_schema`][pydantic.BaseModel.model_json_schema] and
+[`TypeAdapter.json_schema`][pydantic.TypeAdapter.json_schema].
+"""
 from __future__ import annotations as _annotations
 
 import dataclasses
@@ -98,7 +105,8 @@ for more details.
 
 class PydanticJsonSchemaWarning(UserWarning):
     """This class is used to emit warnings produced during JSON schema generation.
-    See the `GenerateJsonSchema.emit_warning` and `GenerateJsonSchema.render_warning_message`
+    See the [`GenerateJsonSchema.emit_warning`][pydantic.json_schema.GenerateJsonSchema.emit_warning] and
+    [`GenerateJsonSchema.render_warning_message`][pydantic.json_schema.GenerateJsonSchema.render_warning_message]
     methods for more details; these can be overridden to control warning behavior.
     """
 
@@ -208,7 +216,8 @@ class GenerateJsonSchema:
     """A class for generating JSON schemas.
 
     This class generates JSON schemas based on configured parameters. The default schema dialect
-    is 'https://json-schema.org/draft/2020-12/schema'. The class uses `by_alias` to configure how fields with
+    is [https://json-schema.org/draft/2020-12/schema](https://json-schema.org/draft/2020-12/schema).
+    The class uses `by_alias` to configure how fields with
     multiple names are handled and `ref_template` to format reference names.
 
     Attributes:
@@ -272,7 +281,7 @@ class GenerateJsonSchema:
 
         # When we encounter definitions we need to try to build them immediately
         # so that they are available schemas that reference them
-        # But it's possible that that CoreSchema was never going to be used
+        # But it's possible that CoreSchema was never going to be used
         # (e.g. because the CoreSchema that references short circuits is JSON schema generation without needing
         #  the reference) so instead of failing altogether if we can't build a definition we
         # store the error raised and re-throw it if we end up needing that def
@@ -1173,7 +1182,7 @@ class GenerateJsonSchema:
 
         json_schema = {'type': 'object', 'properties': properties}
         if required_fields:
-            json_schema['required'] = required_fields  # type: ignore
+            json_schema['required'] = required_fields
         return json_schema
 
     def _get_alias_name(self, field: CoreSchemaField, name: str) -> str:
@@ -1648,6 +1657,17 @@ class GenerateJsonSchema:
         self.update_with_validations(json_schema, schema, self.ValidationsMapping.string)
         return json_schema
 
+    def uuid_schema(self, schema: core_schema.UuidSchema) -> JsonSchemaValue:
+        """Generates a JSON schema that matches a UUID.
+
+        Args:
+            schema: The core schema.
+
+        Returns:
+            The generated JSON schema.
+        """
+        return {'type': 'string', 'format': 'uuid'}
+
     def definitions_schema(self, schema: core_schema.DefinitionsSchema) -> JsonSchemaValue:
         """Generates a JSON schema that matches a schema that defines a JSON object with definitions.
 
@@ -1788,9 +1808,9 @@ class GenerateJsonSchema:
         # be generated for any other core_ref. Currently, this should be the case because we include
         # the id of the source type in the core_ref
         name = DefsRef(self.normalize_name(short_ref))
-        name_mode = DefsRef(self.normalize_name(short_ref + mode_title))
+        name_mode = DefsRef(self.normalize_name(short_ref) + f'-{mode_title}')
         module_qualname = DefsRef(self.normalize_name(core_ref_no_id))
-        module_qualname_mode = DefsRef(module_qualname + mode_title)
+        module_qualname_mode = DefsRef(f'{module_qualname}-{mode_title}')
         module_qualname_id = DefsRef(self.normalize_name(core_ref))
         occurrence_index = self._collision_index.get(module_qualname_id)
         if occurrence_index is None:
@@ -1798,7 +1818,7 @@ class GenerateJsonSchema:
             occurrence_index = self._collision_index[module_qualname_id] = self._collision_counter[module_qualname]
 
         module_qualname_occurrence = DefsRef(f'{module_qualname}__{occurrence_index}')
-        module_qualname_occurrence_mode = DefsRef(f'{module_qualname}{mode_title}__{occurrence_index}')
+        module_qualname_occurrence_mode = DefsRef(f'{module_qualname_mode}__{occurrence_index}')
 
         self._prioritized_defsref_choices[module_qualname_occurrence_mode] = [
             name,
@@ -1912,7 +1932,7 @@ class GenerateJsonSchema:
         """
         for core_key, json_schema_key in mapping.items():
             if core_key in core_schema:
-                json_schema[json_schema_key] = core_schema[core_key]  # type: ignore[literal-required]
+                json_schema[json_schema_key] = core_schema[core_key]
 
     class ValidationsMapping:
         """This class just contains mappings from core_schema attribute names to the corresponding
@@ -2141,15 +2161,15 @@ def _make_json_hashable(value: _Json) -> _HashableJson:
 
 
 def _sort_json_schema(value: JsonSchemaValue, parent_key: str | None = None) -> JsonSchemaValue:
-    if isinstance(value, dict):  # type: ignore
+    if isinstance(value, dict):
         sorted_dict: dict[str, JsonSchemaValue] = {}
         keys = value.keys()
         if parent_key != 'properties':
             keys = sorted(keys)
         for key in keys:
             sorted_dict[key] = _sort_json_schema(value[key], parent_key=key)
-        return sorted_dict  # type: ignore
-    elif isinstance(value, list):  # type: ignore
+        return sorted_dict
+    elif isinstance(value, list):
         sorted_list: list[JsonSchemaValue] = []
         for item in value:  # type: ignore
             sorted_list.append(_sort_json_schema(item))

@@ -32,7 +32,7 @@ def get_type_hints_infer_globalns(
     global namespace from `obj.__module__` if it is not `None`.
 
     Args:
-        obj: The object to get it's type hints.
+        obj: The object to get its type hints.
         localns: The local namespaces.
         include_extras: Whether to recursively include annotation metadata.
 
@@ -248,7 +248,7 @@ def collect_dataclass_fields(
             field_info = FieldInfo.from_annotated_attribute(ann_type, dataclass_field)
         fields[ann_name] = field_info
 
-        if field_info.default is not PydanticUndefined and isinstance(getattr(cls, ann_name), FieldInfo):
+        if field_info.default is not PydanticUndefined and isinstance(getattr(cls, ann_name, field_info), FieldInfo):
             # We need this to fix the default when the "default" from __dataclass_fields__ is a pydantic.FieldInfo
             setattr(cls, ann_name, field_info.default)
 

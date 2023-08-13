@@ -45,7 +45,7 @@ def parametrize_root_model():
 
 def check_schema(schema: CoreSchema) -> None:
     # we assume the shape of the core schema here, which is not a guarantee
-    # pydantic makes to it's users but is useful to check here to make sure
+    # pydantic makes to its users but is useful to check here to make sure
     # we are doing the right thing internally
     assert schema['type'] == 'definitions'
     inner = schema['schema']
@@ -612,3 +612,13 @@ help_result_string = pydoc.render_doc(RootModel)
         )
 
     assert 'class RootModel' in module.help_result_string
+
+
+def test_copy_preserves_equality():
+    model = RootModel()
+
+    copied = model.__copy__()
+    assert model == copied
+
+    deepcopied = model.__deepcopy__()
+    assert model == deepcopied

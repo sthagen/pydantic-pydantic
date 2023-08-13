@@ -1,5 +1,8 @@
-The primary means of defining objects in Pydantic is via models. Models are simply classes which inherit from
-[`pydantic.BaseModel`][pydantic.BaseModel].
+??? api "API Documentation"
+    [`pydantic.main.BaseModel`][pydantic.main.BaseModel]<br>
+
+One of the primary ways of defining schema in Pydantic is via models. Models are simply classes which inherit from
+[`pydantic.BaseModel`][pydantic.main.BaseModel] and define fields as annotated attributes.
 
 You can think of models as similar to structs in languages like C, or as the requirements of a single endpoint
 in an API.
@@ -1205,6 +1208,10 @@ print(Model.y)
 Attributes whose name has a leading underscore are not treated as fields by Pydantic, and are not included in the
 model schema. Instead, these are converted into a "private attribute" which is not validated or even set during
 calls to `__init__`, `model_validate`, etc.
+
+!!! note
+    As of Pydantic v2.1.0, you will receive a NameError if trying to use the [`Field` function](fields.md) with a private attribute.
+    Because private attributes are not treated as fields, the Field() function cannot be applied.
 
 Here is an example of usage:
 

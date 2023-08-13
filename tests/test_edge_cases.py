@@ -446,7 +446,7 @@ def test_tuple_value_error():
         },
         {
             'type': 'decimal_parsing',
-            'loc': ('v', 2, 'function-after[to_decimal(), union[float,int,constrained-str]]'),
+            'loc': ('v', 2, 'function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]'),
             'msg': 'Input should be a valid decimal',
             'input': 'x',
         },
@@ -1237,9 +1237,7 @@ def test_multiple_errors():
             'type': 'is_instance_of',
             'loc': (
                 'a',
-                'function-after[check_digits_validator(), json-or-python[json=function-after[to_decimal(), '
-                'union[float,int,constrained-str]],python=lax-or-strict[lax=union[is-instance[Decimal],'
-                'function-after[to_decimal(), union[float,int,constrained-str]]],strict=is-instance[Decimal]]]]',
+                'function-after[check_digits_validator(), json-or-python[json=function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]],python=lax-or-strict[lax=union[is-instance[Decimal],function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]],strict=is-instance[Decimal]]]]',
                 'is-instance[Decimal]',
             ),
             'msg': 'Input should be an instance of Decimal',
@@ -1250,10 +1248,8 @@ def test_multiple_errors():
             'type': 'decimal_parsing',
             'loc': (
                 'a',
-                'function-after[check_digits_validator(), json-or-python[json=function-after[to_decimal(), '
-                'union[float,int,constrained-str]],python=lax-or-strict[lax=union[is-instance[Decimal],'
-                'function-after[to_decimal(), union[float,int,constrained-str]]],strict=is-instance[Decimal]]]]',
-                'function-after[to_decimal(), union[float,int,constrained-str]]',
+                'function-after[check_digits_validator(), json-or-python[json=function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]],python=lax-or-strict[lax=union[is-instance[Decimal],function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]],strict=is-instance[Decimal]]]]',
+                'function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]',
             ),
             'msg': 'Input should be a valid decimal',
             'input': 'foobar',
@@ -2584,3 +2580,13 @@ def test_union_literal_with_other_type(literal_type, other_type, data, json_valu
     m = Model(value=data, value_types_reversed=data)
     assert m.model_dump() == {'value': data, 'value_types_reversed': data_reversed}
     assert m.model_dump_json() == f'{{"value":{json_value},"value_types_reversed":{json_value_reversed}}}'
+
+
+def test_type_union():
+    class Model(BaseModel):
+        a: Type[Union[str, bytes]]
+        b: Type[Union[Any, str]]
+
+    m = Model(a=bytes, b=int)
+    assert m.model_dump() == {'a': bytes, 'b': int}
+    assert m.a == bytes

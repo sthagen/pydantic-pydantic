@@ -1,3 +1,6 @@
+??? api "API Documentation"
+    [`pydantic.validate_call.validate_call`][pydantic.validate_call.validate_call]<br>
+
 The [`@validate_call`][pydantic.validate_call] decorator allows the arguments passed to a function to be parsed
 and validated using the function's annotations before the function is called.
 
@@ -393,18 +396,3 @@ it never will be.
 ### Return value
 
 The return value of the function may optionally be validated against its return type annotation.
-
-### Model fields and reserved arguments
-
-The following names may not be used by arguments since they can be used internally to store information about
-the function's signature:
-
-* `v__args`
-* `v__kwargs`
-* `v__positional_only`
-
-These names (together with `"args"` and `"kwargs"`) may or may not (depending on the function's signature) appear as
-fields on the internal Pydantic model accessible via `.model` thus this model isn't especially useful
-(e.g. for generating a schema) at the moment.
-
-This should be fixable in future as the way error are raised is changed.
