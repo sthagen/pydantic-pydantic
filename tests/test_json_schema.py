@@ -1614,7 +1614,9 @@ def test_enum_str_default():
     class UserModel(BaseModel):
         friends: MyEnum = MyEnum.FOO
 
-    assert UserModel.model_json_schema()['properties']['friends']['default'] is MyEnum.FOO.value
+    default_value = UserModel.model_json_schema()['properties']['friends']['default']
+    assert type(default_value) is str
+    assert default_value == MyEnum.FOO.value
 
 
 def test_enum_int_default():
@@ -1624,7 +1626,9 @@ def test_enum_int_default():
     class UserModel(BaseModel):
         friends: MyEnum = MyEnum.FOO
 
-    assert UserModel.model_json_schema()['properties']['friends']['default'] is MyEnum.FOO.value
+    default_value = UserModel.model_json_schema()['properties']['friends']['default']
+    assert type(default_value) is int
+    assert default_value == MyEnum.FOO.value
 
 
 def test_dict_default():
@@ -1675,6 +1679,140 @@ def test_model_default():
     }
 
 
+@pytest.mark.parametrize(
+    'ser_json_timedelta,properties',
+    [
+        ('float', {'duration': {'default': 300.0, 'title': 'Duration', 'type': 'number'}}),
+        ('iso8601', {'duration': {'default': 'PT300S', 'format': 'duration', 'title': 'Duration', 'type': 'string'}}),
+    ],
+)
+def test_model_default_timedelta(ser_json_timedelta: Literal['float', 'iso8601'], properties: typing.Dict[str, Any]):
+    class Model(BaseModel):
+        model_config = ConfigDict(ser_json_timedelta=ser_json_timedelta)
+
+        duration: timedelta = timedelta(minutes=5)
+
+    # insert_assert(Model.model_json_schema(mode='serialization'))
+    assert Model.model_json_schema(mode='serialization') == {
+        'properties': properties,
+        'required': ['duration'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    'ser_json_bytes,properties',
+    [
+        ('base64', {'data': {'default': 'Zm9vYmFy', 'format': 'base64url', 'title': 'Data', 'type': 'string'}}),
+        ('utf8', {'data': {'default': 'foobar', 'format': 'binary', 'title': 'Data', 'type': 'string'}}),
+    ],
+)
+def test_model_default_bytes(ser_json_bytes: Literal['base64', 'utf8'], properties: typing.Dict[str, Any]):
+    class Model(BaseModel):
+        model_config = ConfigDict(ser_json_bytes=ser_json_bytes)
+
+        data: bytes = b'foobar'
+
+    # insert_assert(Model.model_json_schema(mode='serialization'))
+    assert Model.model_json_schema(mode='serialization') == {
+        'properties': properties,
+        'required': ['data'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    'ser_json_timedelta,properties',
+    [
+        ('float', {'duration': {'default': 300.0, 'title': 'Duration', 'type': 'number'}}),
+        ('iso8601', {'duration': {'default': 'PT300S', 'format': 'duration', 'title': 'Duration', 'type': 'string'}}),
+    ],
+)
+def test_dataclass_default_timedelta(
+    ser_json_timedelta: Literal['float', 'iso8601'], properties: typing.Dict[str, Any]
+):
+    @dataclass(config=ConfigDict(ser_json_timedelta=ser_json_timedelta))
+    class Dataclass:
+        duration: timedelta = timedelta(minutes=5)
+
+    # insert_assert(TypeAdapter(Dataclass).json_schema(mode='serialization'))
+    assert TypeAdapter(Dataclass).json_schema(mode='serialization') == {
+        'properties': properties,
+        'required': ['duration'],
+        'title': 'Dataclass',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    'ser_json_bytes,properties',
+    [
+        ('base64', {'data': {'default': 'Zm9vYmFy', 'format': 'base64url', 'title': 'Data', 'type': 'string'}}),
+        ('utf8', {'data': {'default': 'foobar', 'format': 'binary', 'title': 'Data', 'type': 'string'}}),
+    ],
+)
+def test_dataclass_default_bytes(ser_json_bytes: Literal['base64', 'utf8'], properties: typing.Dict[str, Any]):
+    @dataclass(config=ConfigDict(ser_json_bytes=ser_json_bytes))
+    class Dataclass:
+        data: bytes = b'foobar'
+
+    # insert_assert(TypeAdapter(Dataclass).json_schema(mode='serialization'))
+    assert TypeAdapter(Dataclass).json_schema(mode='serialization') == {
+        'properties': properties,
+        'required': ['data'],
+        'title': 'Dataclass',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    'ser_json_timedelta,properties',
+    [
+        ('float', {'duration': {'default': 300.0, 'title': 'Duration', 'type': 'number'}}),
+        ('iso8601', {'duration': {'default': 'PT300S', 'format': 'duration', 'title': 'Duration', 'type': 'string'}}),
+    ],
+)
+def test_typeddict_default_timedelta(
+    ser_json_timedelta: Literal['float', 'iso8601'], properties: typing.Dict[str, Any]
+):
+    class MyTypedDict(TypedDict):
+        __pydantic_config__ = ConfigDict(ser_json_timedelta=ser_json_timedelta)
+
+        duration: Annotated[timedelta, Field(timedelta(minutes=5))]
+
+    # insert_assert(TypeAdapter(MyTypedDict).json_schema(mode='serialization'))
+    assert TypeAdapter(MyTypedDict).json_schema(mode='serialization') == {
+        'properties': properties,
+        'required': ['duration'],
+        'title': 'MyTypedDict',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    'ser_json_bytes,properties',
+    [
+        ('base64', {'data': {'default': 'Zm9vYmFy', 'format': 'base64url', 'title': 'Data', 'type': 'string'}}),
+        ('utf8', {'data': {'default': 'foobar', 'format': 'binary', 'title': 'Data', 'type': 'string'}}),
+    ],
+)
+def test_typeddict_default_bytes(ser_json_bytes: Literal['base64', 'utf8'], properties: typing.Dict[str, Any]):
+    class MyTypedDict(TypedDict):
+        __pydantic_config__ = ConfigDict(ser_json_bytes=ser_json_bytes)
+
+        data: Annotated[bytes, Field(b'foobar')]
+
+    # insert_assert(TypeAdapter(MyTypedDict).json_schema(mode='serialization'))
+    assert TypeAdapter(MyTypedDict).json_schema(mode='serialization') == {
+        'properties': properties,
+        'required': ['data'],
+        'title': 'MyTypedDict',
+        'type': 'object',
+    }
+
+
 def test_model_subclass_metadata():
     class A(BaseModel):
         """A Model docstring"""
@@ -1689,6 +1827,25 @@ def test_model_subclass_metadata():
         'properties': {},
     }
     assert B.model_json_schema() == {'title': 'B', 'type': 'object', 'properties': {}}
+
+
+@pytest.mark.parametrize(
+    'docstring,description',
+    [
+        ('foobar', 'foobar'),
+        ('\n     foobar\n    ', 'foobar'),
+        ('foobar\n    ', 'foobar\n    '),
+        ('foo\n    bar\n    ', 'foo\nbar'),
+        ('\n    foo\n    bar\n    ', 'foo\nbar'),
+    ],
+)
+def test_docstring(docstring, description):
+    class A(BaseModel):
+        x: int
+
+    A.__doc__ = docstring
+
+    assert A.model_json_schema()['description'] == description
 
 
 @pytest.mark.parametrize(
@@ -2452,7 +2609,7 @@ def test_tuple_with_extra_schema():
         @classmethod
         def __get_pydantic_core_schema__(cls, _source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
             return core_schema.tuple_positional_schema(
-                [core_schema.int_schema(), core_schema.str_schema()], extra_schema=core_schema.int_schema()
+                [core_schema.int_schema(), core_schema.str_schema()], extras_schema=core_schema.int_schema()
             )
 
     class Model(BaseModel):
@@ -5315,7 +5472,7 @@ def test_multiple_parametrization_of_generic_model() -> None:
 
     for _ in range(sys.getrecursionlimit() + 1):
 
-        class ModelTest(BaseModel):  # noqa: F811
+        class ModelTest(BaseModel):
             c: Outer[Inner]
 
     ModelTest.model_json_schema()
@@ -5378,3 +5535,49 @@ def test_callable_json_schema_extra_dataclass():
     json_schema = adapter.json_schema()
     for key in 'abcdef':
         assert json_schema['properties'][key] == {'title': key.upper(), 'type': 'integer'}  # default is not present
+
+
+def test_model_rebuild_happens_even_with_parent_classes(create_module):
+    module = create_module(
+        # language=Python
+        """
+from __future__ import annotations
+from pydantic import BaseModel
+
+class MyBaseModel(BaseModel):
+    pass
+
+class B(MyBaseModel):
+    b: A
+
+class A(MyBaseModel):
+    a: str
+    """
+    )
+    assert module.B.model_json_schema() == {
+        '$defs': {
+            'A': {
+                'properties': {'a': {'title': 'A', 'type': 'string'}},
+                'required': ['a'],
+                'title': 'A',
+                'type': 'object',
+            }
+        },
+        'properties': {'b': {'$ref': '#/$defs/A'}},
+        'required': ['b'],
+        'title': 'B',
+        'type': 'object',
+    }
+
+
+def test_enum_complex_value() -> None:
+    """https://github.com/pydantic/pydantic/issues/7045"""
+
+    class MyEnum(Enum):
+        foo = (1, 2)
+        bar = (2, 3)
+
+    ta = TypeAdapter(MyEnum)
+
+    # insert_assert(ta.json_schema())
+    assert ta.json_schema() == {'enum': [[1, 2], [2, 3]], 'title': 'MyEnum', 'type': 'array'}

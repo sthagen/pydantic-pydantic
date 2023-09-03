@@ -61,7 +61,7 @@ requires-python = '>=3.7'
 dependencies = [
     'typing-extensions>=4.6.1',
     'annotated-types>=0.4.0',
-    "pydantic-core==2.4.0",
+    "pydantic-core==2.7.0",
 ]
 dynamic = ['version', 'readme']
 
@@ -114,7 +114,7 @@ mypy = [
     "pydantic-settings>=2.0.0",
 ]
 memray = [
-    "pytest-memray",
+    "pytest-memray; platform_system != 'Windows'",
 ]
 
 [tool.pdm.resolution.overrides]
@@ -175,11 +175,11 @@ flake8-quotes = {inline-quotes = 'single', multiline-quotes = 'double'}
 mccabe = { max-complexity = 14 }
 isort = { known-first-party = ['pydantic', 'tests'] }
 target-version = "py37"
-exclude=['pydantic/v1', 'tests/mypy/outputs']
+extend-exclude = ['pydantic/v1', 'tests/mypy/outputs']
 
 [tool.ruff.extend-per-file-ignores]
 "docs/**/*.py" = ['T']
-"tests/**/*.py" = ['T']
+"tests/**/*.py" = ['T', 'E721', 'F811']
 "tests/benchmarks/test_fastapi_startup.py" = ['UP006']
 
 [tool.ruff.pydocstyle]

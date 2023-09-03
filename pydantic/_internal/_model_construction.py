@@ -17,12 +17,17 @@ from ..fields import Field, FieldInfo, ModelPrivateAttr, PrivateAttr
 from ..warnings import PydanticDeprecatedSince20
 from ._config import ConfigWrapper
 from ._core_utils import collect_invalid_schemas, flatten_schema_defs, inline_schema_defs
-from ._decorators import ComputedFieldInfo, DecoratorInfos, PydanticDescriptorProxy
+from ._decorators import (
+    ComputedFieldInfo,
+    DecoratorInfos,
+    PydanticDescriptorProxy,
+    get_attribute_from_bases,
+)
 from ._discriminated_union import apply_discriminators
 from ._fields import collect_model_fields, is_valid_field_name, is_valid_privateattr_name
 from ._generate_schema import GenerateSchema
 from ._generics import PydanticGenericMetadata, get_model_typevars_map
-from ._mock_validator import MockValidator, set_basemodel_mock_validator
+from ._mock_val_ser import MockValSer, set_model_mocks
 from ._schema_generation_shared import CallbackGetCoreSchemaHandler
 from ._typing_extra import get_cls_types_namespace, is_classvar, parent_frame_namespace
 from ._utils import ClassAttribute, is_valid_identifier
@@ -133,20 +138,25 @@ class ModelMetaclass(ABCMeta):
             if __pydantic_generic_metadata__:
                 cls.__pydantic_generic_metadata__ = __pydantic_generic_metadata__
             else:
-                parameters = getattr(cls, '__parameters__', ())
                 parent_parameters = getattr(cls, '__pydantic_generic_metadata__', {}).get('parameters', ())
+                parameters = getattr(cls, '__parameters__', None) or parent_parameters
                 if parameters and parent_parameters and not all(x in parameters for x in parent_parameters):
                     combined_parameters = parent_parameters + tuple(x for x in parameters if x not in parent_parameters)
                     parameters_str = ', '.join([str(x) for x in combined_parameters])
+                    generic_type_label = f'typing.Generic[{parameters_str}]'
                     error_message = (
                         f'All parameters must be present on typing.Generic;'
-                        f' you should inherit from typing.Generic[{parameters_str}]'
+                        f' you should inherit from {generic_type_label}.'
                     )
                     if Generic not in bases:  # pragma: no cover
-                        # This branch will only be hit if I have misunderstood how `__parameters__` works.
-                        # If that is the case, and a user hits this, I could imagine it being very helpful
-                        # to have this extra detail in the reported traceback.
-                        error_message += f' (bases={bases})'
+                        # We raise an error here not because it is desirable, but because some cases are mishandled.
+                        # It would be nice to remove this error and still have things behave as expected, it's just
+                        # challenging because we are using a custom `__class_getitem__` to parametrize generic models,
+                        # and not returning a typing._GenericAlias from it.
+                        bases_str = ', '.join([x.__name__ for x in bases] + [generic_type_label])
+                        error_message += (
+                            f' Note: `typing.Generic` must go last: `class {cls.__name__}({bases_str}): ...`)'
+                        )
                     raise TypeError(error_message)
 
                 cls.__pydantic_generic_metadata__ = {
@@ -197,7 +207,7 @@ class ModelMetaclass(ABCMeta):
             if item == '__pydantic_core_schema__':
                 # This means the class didn't get a schema generated for it, likely because there was an undefined reference
                 maybe_mock_validator = getattr(self, '__pydantic_validator__', None)
-                if isinstance(maybe_mock_validator, MockValidator):
+                if isinstance(maybe_mock_validator, MockValSer):
                     rebuilt_validator = maybe_mock_validator.rebuild()
                     if rebuilt_validator is not None:
                         # In this case, a validator was built, and so `__pydantic_core_schema__` should now be set
@@ -369,16 +379,11 @@ def set_default_hash_func(namespace: dict[str, Any], bases: tuple[type[Any], ...
     if '__hash__' in namespace:
         return
 
-    base_hash_func = None
-    for base in bases:
-        base_hash_func = getattr(base, '__hash__', PydanticUndefined)
-        if base_hash_func is not PydanticUndefined:
-            break
-
-    if base_hash_func is None:
-        # This will be the case for `BaseModel` since it defines `__eq__` but not `__hash__`.
-        # In this case, we generate a standard hash function, generally for use with frozen models.
-
+    base_hash_func = get_attribute_from_bases(bases, '__hash__')
+    if base_hash_func in {None, object.__hash__}:
+        # If `__hash__` is None _or_ `object.__hash__`, we generate a hash function.
+        # It will be `None` if not overridden from BaseModel, but may be `object.__hash__` if there is another
+        # parent class earlier in the bases which doesn't override `__hash__` (e.g. `typing.Generic`).
         def hash_func(self: Any) -> int:
             return hash(self.__class__) + hash(tuple(self.__dict__.values()))
 
@@ -456,7 +461,7 @@ def complete_model_class(
     )
 
     if config_wrapper.defer_build:
-        set_basemodel_mock_validator(cls, cls_name)
+        set_model_mocks(cls, cls_name)
         return False
 
     try:
@@ -464,7 +469,7 @@ def complete_model_class(
     except PydanticUndefinedAnnotation as e:
         if raise_errors:
             raise
-        set_basemodel_mock_validator(cls, cls_name, f'`{e.name}`')
+        set_model_mocks(cls, cls_name, f'`{e.name}`')
         return False
 
     core_config = config_wrapper.core_config(cls)
@@ -472,7 +477,7 @@ def complete_model_class(
     schema = gen_schema.collect_definitions(schema)
     schema = apply_discriminators(flatten_schema_defs(schema))
     if collect_invalid_schemas(schema):
-        set_basemodel_mock_validator(cls, cls_name)
+        set_model_mocks(cls, cls_name)
         return False
 
     # debug(schema)

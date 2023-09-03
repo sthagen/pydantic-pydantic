@@ -2022,6 +2022,27 @@ def test_generic_subclass_with_extra_type_requires_all_params():
             ...
 
 
+def test_generic_subclass_with_extra_type_with_hint_message():
+    E = TypeVar('E', bound=BaseModel)
+    D = TypeVar('D')
+
+    class BaseGenericClass(Generic[E, D], BaseModel):
+        uid: str
+        name: str
+
+    with pytest.raises(
+        TypeError,
+        match=re.escape(
+            'All parameters must be present on typing.Generic; you should inherit from typing.Generic[~E, ~D].'
+            ' Note: `typing.Generic` must go last:'
+            ' `class ChildGenericClass(BaseGenericClass, typing.Generic[~E, ~D]): ...`'
+        ),
+    ):
+
+        class ChildGenericClass(BaseGenericClass[E, Dict[str, Any]]):
+            ...
+
+
 def test_multi_inheritance_generic_binding():
     T = TypeVar('T')
 
@@ -2561,3 +2582,46 @@ def test_parametrize_with_basemodel():
 
     class Concrete(SimpleGenericModel[BaseModel]):
         pass
+
+
+def test_no_generic_base():
+    T = TypeVar('T')
+
+    class A(BaseModel, Generic[T]):
+        a: T
+
+    class B(A[T]):
+        b: T
+
+    class C(B[int]):
+        pass
+
+    assert C(a='1', b='2').model_dump() == {'a': 1, 'b': 2}
+    with pytest.raises(ValidationError) as exc_info:
+        C(a='a', b='b')
+    assert exc_info.value.errors(include_url=False) == [
+        {
+            'input': 'a',
+            'loc': ('a',),
+            'msg': 'Input should be a valid integer, unable to parse string as an integer',
+            'type': 'int_parsing',
+        },
+        {
+            'input': 'b',
+            'loc': ('b',),
+            'msg': 'Input should be a valid integer, unable to parse string as an integer',
+            'type': 'int_parsing',
+        },
+    ]
+
+
+def test_reverse_order_generic_hashability():
+    T = TypeVar('T')
+
+    class Model(Generic[T], BaseModel):
+        x: T
+        model_config = dict(frozen=True)
+
+    m1 = Model[int](x=1)
+    m2 = Model[int](x=1)
+    assert len({m1, m2}) == 1

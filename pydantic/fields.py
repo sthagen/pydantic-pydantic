@@ -13,7 +13,7 @@ from warnings import warn
 import annotated_types
 import typing_extensions
 from pydantic_core import PydanticUndefined
-from typing_extensions import Unpack
+from typing_extensions import Literal, Unpack
 
 from . import types
 from ._internal import _decorators, _fields, _generics, _internal_dataclass, _repr, _typing_extra, _utils
@@ -56,6 +56,7 @@ class _FromFieldInfoInputs(typing_extensions.TypedDict, total=False):
     allow_inf_nan: bool | None
     max_digits: int | None
     decimal_places: int | None
+    union_mode: Literal['smart', 'left_to_right'] | None
     discriminator: str | None
     json_schema_extra: dict[str, Any] | typing.Callable[[dict[str, Any]], None] | None
     frozen: bool | None
@@ -92,7 +93,7 @@ class FieldInfo(_repr.Representation):
         title: The title of the field.
         description: The description of the field.
         examples: List of examples of the field.
-        exclude: Whether to exclude the field from the model schema.
+        exclude: Whether to exclude the field from the model serialization.
         discriminator: Field name for discriminating the type in a tagged union.
         json_schema_extra: Dictionary of extra JSON schema properties.
         frozen: Whether the field is frozen.
@@ -161,6 +162,7 @@ class FieldInfo(_repr.Representation):
         'allow_inf_nan': None,
         'max_digits': None,
         'decimal_places': None,
+        'union_mode': None,
     }
 
     def __init__(self, **kwargs: Unpack[_FieldInfoInputs]) -> None:
@@ -572,7 +574,7 @@ class FieldInfo(_repr.Representation):
 
 @dataclasses.dataclass(**_internal_dataclass.slots_true)
 class AliasPath:
-    """usage docs: https://docs.pydantic.dev/2.0/usage/fields#aliaspath-and-aliaschoices
+    """Usage docs: https://docs.pydantic.dev/2.3/usage/fields#aliaspath-and-aliaschoices
 
     A data class used by `validation_alias` as a convenience to create aliases.
 
@@ -596,7 +598,7 @@ class AliasPath:
 
 @dataclasses.dataclass(**_internal_dataclass.slots_true)
 class AliasChoices:
-    """usage docs: https://docs.pydantic.dev/2.0/usage/fields#aliaspath-and-aliaschoices
+    """Usage docs: https://docs.pydantic.dev/2.3/usage/fields#aliaspath-and-aliaschoices
 
     A data class used by `validation_alias` as a convenience to create aliases.
 
@@ -692,14 +694,18 @@ def Field(  # noqa: C901
     decimal_places: int | None = _Unset,
     min_length: int | None = _Unset,
     max_length: int | None = _Unset,
+    union_mode: Literal['smart', 'left_to_right'] = _Unset,
     **extra: Unpack[_EmptyKwargs],
 ) -> Any:
-    """Usage docs: https://docs.pydantic.dev/dev-v2/usage/fields
+    """Usage docs: https://docs.pydantic.dev/2.3/usage/fields
 
     Create a field for objects that can be configured.
 
     Used to provide extra information about a field, either for the model schema or complex validation. Some arguments
     apply only to number fields (`int`, `float`, `Decimal`) and some apply only to `str`.
+
+    Note:
+        - Any `_Unset` objects will be replaced by the corresponding value defined in the `_DefaultValues` dictionary. If a key for the `_Unset` object is not found in the `_DefaultValues` dictionary, it will default to `None`
 
     Args:
         default: Default value if the field is not set.
@@ -713,11 +719,11 @@ def Field(  # noqa: C901
         title: Human-readable title.
         description: Human-readable description.
         examples: Example values for this field.
-        exclude: Whether to exclude the field from the model schema.
+        exclude: Whether to exclude the field from the model serialization.
         discriminator: Field name for discriminating the type in a tagged union.
         json_schema_extra: Any additional JSON schema data for the schema property.
         frozen: Whether the field is frozen.
-        validate_default: Run validation that isn't only checking existence of defaults. `True` by default.
+        validate_default: Run validation that isn't only checking existence of defaults. This can be set to `True` or `False`. If not set, it defaults to `None`.
         repr: A boolean indicating whether to include the field in the `__repr__` output.
         init_var: Whether the field should be included in the constructor of the dataclass.
         kw_only: Whether the field should be a keyword-only argument in the constructor of the dataclass.
@@ -734,6 +740,8 @@ def Field(  # noqa: C901
         allow_inf_nan: Allow `inf`, `-inf`, `nan`. Only applicable to numbers.
         max_digits: Maximum number of allow digits for strings.
         decimal_places: Maximum number of decimal places allowed for numbers.
+        union_mode: The strategy to apply when validating a union. Can be `smart` (the default), or `left_to_right`.
+            See [Union Mode](../usage/types/unions.md#union-mode) for details.
         extra: Include extra fields used by the JSON schema.
 
             !!! warning Deprecated
@@ -782,7 +790,9 @@ def Field(  # noqa: C901
 
     if extra:
         warn(
-            'Extra keyword arguments on `Field` is deprecated and will be removed. use `json_schema_extra` instead',
+            'Using extra keyword arguments on `Field` is deprecated and will be removed.'
+            ' Use `json_schema_extra` instead.'
+            f' (Extra keys: {", ".join(k.__repr__() for k in extra.keys())})',
             DeprecationWarning,
         )
         if not json_schema_extra or json_schema_extra is _Unset:
@@ -835,6 +845,7 @@ def Field(  # noqa: C901
         allow_inf_nan=allow_inf_nan,
         max_digits=max_digits,
         decimal_places=decimal_places,
+        union_mode=union_mode,
     )
 
 
@@ -990,7 +1001,7 @@ def computed_field(
     repr: bool = True,
     return_type: Any = PydanticUndefined,
 ) -> PropertyT | typing.Callable[[PropertyT], PropertyT]:
-    """Usage docs: https://docs.pydantic.dev/dev-v2/usage/computed_fields/
+    """Usage docs: https://docs.pydantic.dev/2.3/usage/computed_fields/
 
     Decorator to include `property` and `cached_property` when serializing models.
 

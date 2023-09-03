@@ -8,7 +8,7 @@ import re
 import sys
 import typing
 import warnings
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from copy import copy
 from enum import Enum
 from functools import partial
@@ -20,7 +20,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ContextManager,
     Dict,
     ForwardRef,
     Iterable,
@@ -41,11 +40,11 @@ from ..config import ConfigDict, JsonEncoder
 from ..errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation, PydanticUserError
 from ..fields import AliasChoices, AliasPath, FieldInfo
 from ..json_schema import JsonSchemaValue
-from ..version import VERSION
+from ..version import version_short
 from ..warnings import PydanticDeprecatedSince20
 from . import _decorators, _discriminated_union, _known_annotated_metadata, _typing_extra
 from ._annotated_handlers import GetCoreSchemaHandler, GetJsonSchemaHandler
-from ._config import ConfigWrapper
+from ._config import ConfigWrapper, ConfigWrapperStack
 from ._core_metadata import (
     CoreMetadataHandler,
     build_metadata_dict,
@@ -67,6 +66,7 @@ from ._decorators import (
     ModelValidatorDecoratorInfo,
     RootValidatorDecoratorInfo,
     ValidatorDecoratorInfo,
+    get_attribute_from_bases,
     inspect_field_serializer,
     inspect_model_serializer,
     inspect_validator,
@@ -219,7 +219,7 @@ def modify_model_json_schema(
         original_schema['title'] = cls.__name__
     docstring = cls.__doc__
     if docstring and 'description' not in original_schema:
-        original_schema['description'] = docstring
+        original_schema['description'] = inspect.cleandoc(docstring)
     return json_schema
 
 
@@ -249,7 +249,7 @@ def _add_custom_serialization_from_json_encoders(
             continue
 
         warnings.warn(
-            f'`json_encoders` is deprecated. See https://docs.pydantic.dev/{VERSION}/usage/serialization/#custom-serializers for alternatives',
+            f'`json_encoders` is deprecated. See https://docs.pydantic.dev/{version_short()}/usage/serialization/#custom-serializers for alternatives',
             PydanticDeprecatedSince20,
         )
 
@@ -258,34 +258,6 @@ def _add_custom_serialization_from_json_encoders(
         return schema
 
     return schema
-
-
-class ConfigWrapperStack:
-    """A stack of `ConfigWrapper` instances."""
-
-    def __init__(self, config_wrapper: ConfigWrapper):
-        self._config_wrapper_stack: list[ConfigWrapper] = [config_wrapper]
-
-    @property
-    def tail(self) -> ConfigWrapper:
-        return self._config_wrapper_stack[-1]
-
-    def push(self, config_wrapper: ConfigWrapper | ConfigDict | None) -> ContextManager[None]:
-        if config_wrapper is None:
-            return nullcontext()
-
-        if not isinstance(config_wrapper, ConfigWrapper):
-            config_wrapper = ConfigWrapper(config_wrapper, check=False)
-
-        @contextmanager
-        def _context_manager() -> Iterator[None]:
-            self._config_wrapper_stack.append(config_wrapper)
-            try:
-                yield
-            finally:
-                self._config_wrapper_stack.pop()
-
-        return _context_manager()
 
 
 class GenerateSchema:
@@ -480,7 +452,7 @@ class GenerateSchema:
 
             model_validators = decorators.model_validators.values()
 
-            extra_validator = None
+            extras_schema = None
             if core_config.get('extra_fields_behavior') == 'allow':
                 for tp in (cls, *cls.__mro__):
                     extras_annotation = cls.__annotations__.get('__pydantic_extra__', None)
@@ -495,7 +467,7 @@ class GenerateSchema:
                             required=True,
                         )[1]
                         if extra_items_type is not Any:
-                            extra_validator = self.generate_schema(extra_items_type)
+                            extras_schema = self.generate_schema(extra_items_type)
                             break
 
             with self._config_wrapper_stack.push(config_wrapper):
@@ -521,7 +493,7 @@ class GenerateSchema:
                             self._computed_field_schema(d, decorators.field_serializers)
                             for d in computed_fields.values()
                         ],
-                        extra_validator=extra_validator,
+                        extras_schema=extras_schema,
                         model_name=cls.__name__,
                     )
                     inner_schema = apply_validators(fields_schema, decorators.root_validators.values(), None)
@@ -587,16 +559,25 @@ class GenerateSchema:
         else:
             ref_mode = 'to-def'
 
+        schema: CoreSchema
         get_schema = getattr(obj, '__get_pydantic_core_schema__', None)
         if get_schema is None:
-            return None
-
-        schema: CoreSchema
-        if len(inspect.signature(get_schema).parameters) == 1:
-            # (source) -> CoreSchema
-            schema = get_schema(source)
+            validators = getattr(obj, '__get_validators__', None)
+            if validators is None:
+                return None
+            warn(
+                '`__get_validators__` is deprecated and will be removed, use `__get_pydantic_core_schema__` instead.',
+                PydanticDeprecatedSince20,
+            )
+            schema = core_schema.chain_schema([core_schema.general_plain_validator_function(v) for v in validators()])
         else:
-            schema = get_schema(source, CallbackGetCoreSchemaHandler(self._generate_schema, self, ref_mode=ref_mode))
+            if len(inspect.signature(get_schema).parameters) == 1:
+                # (source) -> CoreSchema
+                schema = get_schema(source)
+            else:
+                schema = get_schema(
+                    source, CallbackGetCoreSchemaHandler(self._generate_schema, self, ref_mode=ref_mode)
+                )
 
         schema = self._unpack_refs_defs(schema)
 
@@ -970,7 +951,7 @@ class GenerateSchema:
     def _union_schema(self, union_type: Any) -> core_schema.CoreSchema:
         """Generate schema for a Union."""
         args = self._get_args_resolving_forward_refs(union_type, required=True)
-        choices: list[core_schema.CoreSchema] = []
+        choices: list[CoreSchema | tuple[CoreSchema, str]] = []
         nullable = False
         for arg in args:
             if arg is None or arg is _typing_extra.NoneType:
@@ -979,7 +960,8 @@ class GenerateSchema:
                 choices.append(self.generate_schema(arg))
 
         if len(choices) == 1:
-            s = choices[0]
+            first_choice = choices[0]
+            s = first_choice[0] if isinstance(first_choice, tuple) else first_choice
         else:
             s = core_schema.union_schema(choices)
 
@@ -1047,11 +1029,10 @@ class GenerateSchema:
                     code='typed-dict-version',
                 )
 
-            config: ConfigDict | None = None
-            for base in (typed_dict_cls, *typed_dict_cls.__orig_bases__):
-                config = getattr(base, '__pydantic_config__', None)
-                if config is not None:
-                    break
+            try:
+                config: ConfigDict | None = get_attribute_from_bases(typed_dict_cls, '__pydantic_config__')
+            except AttributeError:
+                config = None
 
             with self._config_wrapper_stack.push(config):
                 core_config = self._config_wrapper.core_config(typed_dict_cls)
@@ -1088,7 +1069,9 @@ class GenerateSchema:
                         field_name, field_info, decorators, required=required
                     )
 
-                metadata = build_metadata_dict(js_functions=[partial(modify_model_json_schema, cls=typed_dict_cls)])
+                metadata = build_metadata_dict(
+                    js_functions=[partial(modify_model_json_schema, cls=typed_dict_cls)], typed_dict_cls=typed_dict_cls
+                )
 
                 td_schema = core_schema.typed_dict_schema(
                     fields,
@@ -1130,7 +1113,9 @@ class GenerateSchema:
 
             arguments_schema = core_schema.arguments_schema(
                 [
-                    self._generate_parameter_schema(field_name, annotation)
+                    self._generate_parameter_schema(
+                        field_name, annotation, default=namedtuple_cls._field_defaults.get(field_name, Parameter.empty)
+                    )
                     for field_name, annotation in annotations.items()
                 ],
                 metadata=build_metadata_dict(js_prefer_positional_arguments=True),
@@ -1305,7 +1290,7 @@ class GenerateSchema:
 
                 self = self._current_generate_schema
 
-                from ._dataclasses import is_pydantic_dataclass
+                from ..dataclasses import is_pydantic_dataclass
 
                 if is_pydantic_dataclass(dataclass):
                     fields = dataclass.__pydantic_fields__
@@ -1436,6 +1421,7 @@ class GenerateSchema:
                 code='model-field-missing-annotation',
             )
 
+        return_type = replace_types(return_type, self._typevars_map)
         return_type_schema = self.generate_schema(return_type)
         # Apply serializers to computed field if there exist
         return_type_schema = self._apply_field_serializers(

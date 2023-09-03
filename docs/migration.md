@@ -238,6 +238,10 @@ See [Model Config](usage/model_config.md) for more details.
         for the annotated type will _also_ be applied even to defaults, not just the custom validators. For
         example, despite the fact that the validator below will never error, the following code raises a `ValidationError`:
 
+!!! note
+    To avoid this, you can use the `validate_default` argument in the `Field` function. When set to `True`, it mimics the behavior of `always=True` in Pydantic v1. However, the new way of using `validate_default` is encouraged as it provides more flexibility and control.
+
+
 ```python test="skip"
 from pydantic import BaseModel, validator
 
@@ -501,6 +505,9 @@ print(Model(x='1'))
 
 In Pydantic V1, the printed result would have been `x=1`, since the value would pass validation as an `int`.
 In Pydantic V2, we recognize that the value is an instance of one of the cases and short-circuit the standard union validation.
+
+To revert to the non-short-circuiting left-to-right behavior of V1, annotate the union with `Field(union_mode='left_to_right')`.
+See [Union Mode](./usage/types/unions.md#union-mode) for more details.
 
 #### Required, optional, and nullable fields
 
@@ -779,7 +786,8 @@ class Model(BaseModel):
     x: MyInt
 ```
 
-Read more about it on the [Composing types via `Annotated`](../usage/types/custom/#composing-types-via-annotated) section.
+Read more about it in the [Composing types via `Annotated`](./usage/types/custom.md#composing-types-via-annotated)
+docs.
 
 For `ConstrainedStr` you can use [`StringConstraints`][pydantic.types.StringConstraints] instead.
 
@@ -787,7 +795,7 @@ For `ConstrainedStr` you can use [`StringConstraints`][pydantic.types.StringCons
 
 | Pydantic V1 | Pydantic V2 |
 | --- | --- |
-| `pydantic.BaseSettings` | [`pydantic-settings.BaseSettings`](#basesettings-has-moved-to-pydantic-settings) |
+| `pydantic.BaseSettings` | [`pydantic_settings.BaseSettings`](#basesettings-has-moved-to-pydantic-settings) |
 | `pydantic.color` | `pydantic_extra_types.color` |
 | `pydantic.types.PaymentCardBrand` | [`pydantic_extra_types.PaymentCardBrand`](#color-and-payment-card-numbers-moved-to-pydantic-extra-types) |
 | `pydantic.types.PaymentCardNumber` | [`pydantic_extra_types.PaymentCardNumber`](#color-and-payment-card-numbers-moved-to-pydantic-extra-types) |
@@ -795,7 +803,7 @@ For `ConstrainedStr` you can use [`StringConstraints`][pydantic.types.StringCons
 | `pydantic.error_wrappers.ValidationError` | `pydantic.ValidationError` |
 | `pydantic.utils.to_camel` | `pydantic.alias_generators.to_pascal` |
 | `pydantic.utils.to_lower_camel` | `pydantic.alias_generators.to_camel` |
-| `pydantic.PyObject` | [`pydantic.ImportString`](usage/types/string_types/#importstring) |
+| `pydantic.PyObject` | [`pydantic.ImportString`](usage/types/string_types.md#importstring) |
 
 ## Deprecated and moved in Pydantic V2
 

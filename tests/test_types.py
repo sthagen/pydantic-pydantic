@@ -50,6 +50,8 @@ from pydantic import (
     AwareDatetime,
     Base64Bytes,
     Base64Str,
+    Base64UrlBytes,
+    Base64UrlStr,
     BaseModel,
     ByteSize,
     ConfigDict,
@@ -2900,7 +2902,7 @@ ANY_THING = object()
                     'loc': ('foo',),
                     'msg': 'Input should be greater than 42.24',
                     'input': Decimal('42'),
-                    'ctx': {'gt': '42.24'},
+                    'ctx': {'gt': Decimal('42.24')},
                 }
             ],
         ),
@@ -2915,7 +2917,7 @@ ANY_THING = object()
                     'msg': 'Input should be less than 42.24',
                     'input': Decimal('43'),
                     'ctx': {
-                        'lt': '42.24',
+                        'lt': Decimal('42.24'),
                     },
                 },
             ],
@@ -2932,7 +2934,7 @@ ANY_THING = object()
                     'msg': 'Input should be greater than or equal to 42.24',
                     'input': Decimal('42'),
                     'ctx': {
-                        'ge': '42.24',
+                        'ge': Decimal('42.24'),
                     },
                 }
             ],
@@ -2949,7 +2951,7 @@ ANY_THING = object()
                     'msg': 'Input should be less than or equal to 42.24',
                     'input': Decimal('43'),
                     'ctx': {
-                        'le': '42.24',
+                        'le': Decimal('42.24'),
                     },
                 }
             ],
@@ -2962,7 +2964,7 @@ ANY_THING = object()
                 {
                     'type': 'decimal_max_places',
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 1 decimal places',
+                    'msg': 'Decimal input should have no more than 1 decimal places',
                     'input': Decimal('0.99'),
                     'ctx': {
                         'decimal_places': 1,
@@ -2976,7 +2978,7 @@ ANY_THING = object()
             [
                 {
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 2 digits before the decimal point',
+                    'msg': 'Decimal input should have no more than 2 digits before the decimal point',
                     'type': 'decimal_whole_digits',
                     'input': Decimal('999'),
                     'ctx': {'whole_digits': 2},
@@ -2994,7 +2996,7 @@ ANY_THING = object()
                 {
                     'type': 'decimal_whole_digits',
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 4 digits before the decimal point',
+                    'msg': 'Decimal input should have no more than 4 digits before the decimal point',
                     'input': Decimal('11111.700000'),
                     'ctx': {'whole_digits': 4},
                 }
@@ -3007,7 +3009,7 @@ ANY_THING = object()
                 {
                     'type': 'decimal_max_digits',
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 20 digits in total',
+                    'msg': 'Decimal input should have no more than 20 digits in total',
                     'input': Decimal('7424742403889818000000'),
                     'ctx': {
                         'max_digits': 20,
@@ -3023,7 +3025,7 @@ ANY_THING = object()
                 {
                     'type': 'decimal_max_places',
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 2 decimal places',
+                    'msg': 'Decimal input should have no more than 2 decimal places',
                     'input': Decimal('7.304'),
                     'ctx': {'decimal_places': 2},
                 }
@@ -3036,7 +3038,7 @@ ANY_THING = object()
             [
                 {
                     'loc': ('foo',),
-                    'msg': 'ensure that there are no more than 4 digits in total',
+                    'msg': 'Decimal input should have no more than 4 digits in total',
                     'type': 'decimal_max_digits',
                     'input': Decimal('0.00007'),
                     'ctx': {'max_digits': 4},
@@ -3082,9 +3084,7 @@ ANY_THING = object()
                     'loc': ('foo',),
                     'msg': 'Input should be a multiple of 5',
                     'input': Decimal('42'),
-                    'ctx': {
-                        'multiple_of': Decimal('5'),
-                    },
+                    'ctx': {'multiple_of': Decimal('5')},
                 }
             ],
         ),
@@ -3149,7 +3149,7 @@ def test_decimal_not_finite(value, result, AllowInfModel):
 
 
 def test_decimal_invalid():
-    with pytest.raises(ValueError, match='allow_inf_nan=True cannot be used with max_digits or decimal_places'):
+    with pytest.raises(SchemaError, match='allow_inf_nan=True cannot be used with max_digits or decimal_places'):
 
         class Model(BaseModel):
             v: condecimal(allow_inf_nan=True, max_digits=4)
@@ -3206,6 +3206,16 @@ def test_path_like_strict():
         'required': ['foo'],
         'title': 'Model',
     }
+
+
+def test_path_strict_override():
+    class Model(BaseModel):
+        model_config = ConfigDict(strict=True)
+
+        x: Path = Field(strict=False)
+
+    m = Model(x='/foo/bar')
+    assert m.x == Path('/foo/bar')
 
 
 def test_path_validation_fails():
@@ -4683,12 +4693,70 @@ def test_default_union_types():
     assert repr(DefaultModel(v=1).v) == '1'
     assert repr(DefaultModel(v='1').v) == "'1'"
 
-    # assert DefaultModel.model_json_schema() == {
-    #     'title': 'DefaultModel',
-    #     'type': 'object',
-    #     'properties': {'v': {'title': 'V', 'anyOf': [{'type': t} for t in ('integer', 'boolean', 'string')]}},
-    #     'required': ['v'],
-    # }
+    assert DefaultModel.model_json_schema() == {
+        'title': 'DefaultModel',
+        'type': 'object',
+        'properties': {'v': {'title': 'V', 'anyOf': [{'type': t} for t in ('integer', 'boolean', 'string')]}},
+        'required': ['v'],
+    }
+
+
+def test_default_union_types_left_to_right():
+    class DefaultModel(BaseModel):
+        v: Annotated[Union[int, bool, str], Field(union_mode='left_to_right')]
+
+    print(DefaultModel.__pydantic_core_schema__)
+
+    # int will coerce everything in left-to-right mode
+    assert repr(DefaultModel(v=True).v) == '1'
+    assert repr(DefaultModel(v=1).v) == '1'
+    assert repr(DefaultModel(v='1').v) == '1'
+
+    assert DefaultModel.model_json_schema() == {
+        'title': 'DefaultModel',
+        'type': 'object',
+        'properties': {'v': {'title': 'V', 'anyOf': [{'type': t} for t in ('integer', 'boolean', 'string')]}},
+        'required': ['v'],
+    }
+
+
+def test_union_enum_int_left_to_right():
+    class BinaryEnum(IntEnum):
+        ZERO = 0
+        ONE = 1
+
+    # int will win over enum in this case
+    assert TypeAdapter(Union[BinaryEnum, int]).validate_python(0) is not BinaryEnum.ZERO
+
+    # in left to right mode, enum will validate successfully and take precedence
+    assert (
+        TypeAdapter(Annotated[Union[BinaryEnum, int], Field(union_mode='left_to_right')]).validate_python(0)
+        is BinaryEnum.ZERO
+    )
+
+
+def test_union_uuid_str_left_to_right():
+    IdOrSlug = Union[UUID, str]
+
+    # in smart mode JSON and python are currently validated differently in this
+    # case, because in Python this is a str but in JSON a str is also a UUID
+    assert TypeAdapter(IdOrSlug).validate_json('\"f4fe10b4-e0c8-4232-ba26-4acd491c2414\"') == UUID(
+        'f4fe10b4-e0c8-4232-ba26-4acd491c2414'
+    )
+    assert (
+        TypeAdapter(IdOrSlug).validate_python('f4fe10b4-e0c8-4232-ba26-4acd491c2414')
+        == 'f4fe10b4-e0c8-4232-ba26-4acd491c2414'
+    )
+
+    IdOrSlugLTR = Annotated[Union[UUID, str], Field(union_mode='left_to_right')]
+
+    # in left to right mode both JSON and python are validated as UUID
+    assert TypeAdapter(IdOrSlugLTR).validate_json('\"f4fe10b4-e0c8-4232-ba26-4acd491c2414\"') == UUID(
+        'f4fe10b4-e0c8-4232-ba26-4acd491c2414'
+    )
+    assert TypeAdapter(IdOrSlugLTR).validate_python('f4fe10b4-e0c8-4232-ba26-4acd491c2414') == UUID(
+        'f4fe10b4-e0c8-4232-ba26-4acd491c2414'
+    )
 
 
 def test_default_union_class():
@@ -4816,6 +4884,13 @@ def test_custom_generic_containers():
         pytest.param(
             Base64Str, bytearray(b'Zm9vIGJhcg=='), 'foo bar', 'Zm9vIGJhcg==\n', id='Base64Str-bytearray-input'
         ),
+        pytest.param(
+            Base64Bytes,
+            b'BCq+6+1/Paun/Q==',
+            b'\x04*\xbe\xeb\xed\x7f=\xab\xa7\xfd',
+            b'BCq+6+1/Paun/Q==\n',
+            id='Base64Bytes-bytes-alphabet-vanilla',
+        ),
     ],
 )
 def test_base64(field_type, input_data, expected_value, serialized_data):
@@ -4874,6 +4949,99 @@ def test_base64_invalid(field_type, input_data):
             'ctx': {'error': 'Incorrect padding'},
             'input': input_data,
             'loc': ('base64_value',),
+            'msg': "Base64 decoding error: 'Incorrect padding'",
+            'type': 'base64_decode',
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ('field_type', 'input_data', 'expected_value', 'serialized_data'),
+    [
+        pytest.param(Base64UrlBytes, b'Zm9vIGJhcg==\n', b'foo bar', b'Zm9vIGJhcg==', id='Base64UrlBytes-reversible'),
+        pytest.param(Base64UrlStr, 'Zm9vIGJhcg==\n', 'foo bar', 'Zm9vIGJhcg==', id='Base64UrlStr-reversible'),
+        pytest.param(Base64UrlBytes, b'Zm9vIGJhcg==', b'foo bar', b'Zm9vIGJhcg==', id='Base64UrlBytes-bytes-input'),
+        pytest.param(Base64UrlBytes, 'Zm9vIGJhcg==', b'foo bar', b'Zm9vIGJhcg==', id='Base64UrlBytes-str-input'),
+        pytest.param(
+            Base64UrlBytes, bytearray(b'Zm9vIGJhcg=='), b'foo bar', b'Zm9vIGJhcg==', id='Base64UrlBytes-bytearray-input'
+        ),
+        pytest.param(Base64UrlStr, b'Zm9vIGJhcg==', 'foo bar', 'Zm9vIGJhcg==', id='Base64UrlStr-bytes-input'),
+        pytest.param(Base64UrlStr, 'Zm9vIGJhcg==', 'foo bar', 'Zm9vIGJhcg==', id='Base64UrlStr-str-input'),
+        pytest.param(
+            Base64UrlStr, bytearray(b'Zm9vIGJhcg=='), 'foo bar', 'Zm9vIGJhcg==', id='Base64UrlStr-bytearray-input'
+        ),
+        pytest.param(
+            Base64UrlBytes,
+            b'BCq-6-1_Paun_Q==',
+            b'\x04*\xbe\xeb\xed\x7f=\xab\xa7\xfd',
+            b'BCq-6-1_Paun_Q==',
+            id='Base64UrlBytes-bytes-alphabet-url',
+        ),
+        pytest.param(
+            Base64UrlBytes,
+            b'BCq+6+1/Paun/Q==',
+            b'\x04*\xbe\xeb\xed\x7f=\xab\xa7\xfd',
+            b'BCq-6-1_Paun_Q==',
+            id='Base64UrlBytes-bytes-alphabet-vanilla',
+        ),
+    ],
+)
+def test_base64url(field_type, input_data, expected_value, serialized_data):
+    class Model(BaseModel):
+        base64url_value: field_type
+        base64url_value_or_none: Optional[field_type] = None
+
+    m = Model(base64url_value=input_data)
+    assert m.base64url_value == expected_value
+
+    m = Model.model_construct(base64url_value=expected_value)
+    assert m.base64url_value == expected_value
+
+    assert m.model_dump() == {
+        'base64url_value': serialized_data,
+        'base64url_value_or_none': None,
+    }
+
+    assert Model.model_json_schema() == {
+        'properties': {
+            'base64url_value': {
+                'format': 'base64url',
+                'title': 'Base64Url Value',
+                'type': 'string',
+            },
+            'base64url_value_or_none': {
+                'anyOf': [{'type': 'string', 'format': 'base64url'}, {'type': 'null'}],
+                'default': None,
+                'title': 'Base64Url Value Or None',
+            },
+        },
+        'required': ['base64url_value'],
+        'title': 'Model',
+        'type': 'object',
+    }
+
+
+@pytest.mark.parametrize(
+    ('field_type', 'input_data'),
+    [
+        pytest.param(Base64UrlBytes, b'Zm9vIGJhcg', id='Base64UrlBytes-invalid-base64-bytes'),
+        pytest.param(Base64UrlBytes, 'Zm9vIGJhcg', id='Base64UrlBytes-invalid-base64-str'),
+        pytest.param(Base64UrlStr, b'Zm9vIGJhcg', id='Base64UrlStr-invalid-base64-bytes'),
+        pytest.param(Base64UrlStr, 'Zm9vIGJhcg', id='Base64UrlStr-invalid-base64-str'),
+    ],
+)
+def test_base64url_invalid(field_type, input_data):
+    class Model(BaseModel):
+        base64url_value: field_type
+
+    with pytest.raises(ValidationError) as e:
+        Model(base64url_value=input_data)
+
+    assert e.value.errors(include_url=False) == [
+        {
+            'ctx': {'error': 'Incorrect padding'},
+            'input': input_data,
+            'loc': ('base64url_value',),
             'msg': "Base64 decoding error: 'Incorrect padding'",
             'type': 'base64_decode',
         },
@@ -4979,12 +5147,15 @@ def test_defaultdict_infer_default_factory() -> None:
     class Model(BaseModel):
         a: DefaultDict[int, List[int]]
         b: DefaultDict[int, int]
+        c: DefaultDict[int, set]
 
-    m = Model(a={}, b={})
+    m = Model(a={}, b={}, c={})
     assert m.a.default_factory is not None
     assert m.a.default_factory() == []
     assert m.b.default_factory is not None
     assert m.b.default_factory() == 0
+    assert m.c.default_factory is not None
+    assert m.c.default_factory() == set()
 
 
 def test_defaultdict_explicit_default_factory() -> None:
@@ -5125,7 +5296,7 @@ def test_handle_3rd_party_custom_type_reusing_known_metadata() -> None:
             'loc': ('x',),
             'msg': 'Input should be greater than 0',
             'input': -1,
-            'ctx': {'gt': '0'},
+            'ctx': {'gt': Decimal('0')},
         }
     ]
 

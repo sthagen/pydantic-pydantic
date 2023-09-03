@@ -438,15 +438,8 @@ def test_tuple_value_error():
             'input': 'y',
         },
         {
-            'type': 'is_instance_of',
-            'loc': ('v', 2, 'is-instance[Decimal]'),
-            'msg': 'Input should be an instance of Decimal',
-            'input': 'x',
-            'ctx': {'class': 'Decimal'},
-        },
-        {
             'type': 'decimal_parsing',
-            'loc': ('v', 2, 'function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]'),
+            'loc': ('v', 2),
             'msg': 'Input should be a valid decimal',
             'input': 'x',
         },
@@ -1234,23 +1227,8 @@ def test_multiple_errors():
             'input': 'foobar',
         },
         {
-            'type': 'is_instance_of',
-            'loc': (
-                'a',
-                'function-after[check_digits_validator(), json-or-python[json=function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]],python=lax-or-strict[lax=union[is-instance[Decimal],function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]],strict=is-instance[Decimal]]]]',
-                'is-instance[Decimal]',
-            ),
-            'msg': 'Input should be an instance of Decimal',
-            'input': 'foobar',
-            'ctx': {'class': 'Decimal'},
-        },
-        {
             'type': 'decimal_parsing',
-            'loc': (
-                'a',
-                'function-after[check_digits_validator(), json-or-python[json=function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]],python=lax-or-strict[lax=union[is-instance[Decimal],function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]],strict=is-instance[Decimal]]]]',
-                'function-after[to_decimal(), union[int,constrained-str,function-plain[str()]]]',
-            ),
+            'loc': ('a', 'decimal'),
             'msg': 'Input should be a valid decimal',
             'input': 'foobar',
         },
@@ -1525,13 +1503,6 @@ class DisplayGen(Generic[T1, T2]):
     def __init__(self, t1: T1, t2: T2):
         self.t1 = t1
         self.t2 = t2
-
-    @classmethod
-    def __get_validators__(cls):
-        def validator(v):
-            return v
-
-        yield validator
 
 
 @pytest.mark.parametrize(

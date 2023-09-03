@@ -138,7 +138,7 @@ class MyDataclass2:
 1. You can read more about `validate_assignment` in [model_config](model_config.md#validate-assignment).
 
 !!! note
-    Pydantic dataclasses do not support [`extra='allow'`](model_config/#extra-attributes), where extra fields passed
+    Pydantic dataclasses do not support [`extra='allow'`](model_config.md#extra-attributes), where extra fields passed
     to the initializer would be stored as extra attributes on the dataclass.
 
     `extra='ignore'` is still supported for the purpose of ignoring
@@ -354,6 +354,34 @@ class Model(BaseModel):
 m = Model(dc=my_dc, other='other')
 print(repr(m))
 #> Model(dc=DC(a=ArbitraryType(value=3), b='qwe'), other='other')
+```
+
+### Checking if a dataclass is a pydantic dataclass
+
+Pydantic dataclasses are still considered dataclasses, so using `dataclasses.is_dataclass` will return `True`. To check if a type is specifically a pydantic dataclass you can use `pydantic.dataclasses.is_pydantic_dataclass`.
+
+```py
+import dataclasses
+
+import pydantic
+
+
+@dataclasses.dataclass
+class StdLibDataclass:
+    id: int
+
+
+PydanticDataclass = pydantic.dataclasses.dataclass(StdLibDataclass)
+
+print(dataclasses.is_dataclass(StdLibDataclass))
+#> True
+print(pydantic.dataclasses.is_pydantic_dataclass(StdLibDataclass))
+#> False
+
+print(dataclasses.is_dataclass(PydanticDataclass))
+#> True
+print(pydantic.dataclasses.is_pydantic_dataclass(PydanticDataclass))
+#> True
 ```
 
 ## Initialization hooks

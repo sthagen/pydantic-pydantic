@@ -3,8 +3,16 @@ from typing import Tuple
 
 __all__ = 'VERSION', 'version_info'
 
-VERSION = '2.1.1'
+VERSION = '2.3.0'
 """The version of Pydantic."""
+
+
+def version_short() -> str:
+    """Return the major.minor part of Pydantic version.
+
+    It return '2.1' if Pydantic version is '2.1.1'.
+    """
+    return '.'.join(VERSION.split('.')[:2])
 
 
 def version_info() -> str:
