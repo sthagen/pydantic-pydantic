@@ -60,7 +60,6 @@ nav:
     - Types Overview: usage/types/types.md
     - Standard Library Types: usage/types/standard_types.md
     - Booleans: usage/types/booleans.md
-    - ByteSize: usage/types/bytesize.md
     - Callables: usage/types/callables.md
     - Datetimes: usage/types/datetime.md
     - Dicts and Mapping: usage/types/dicts_mapping.md
@@ -90,7 +89,6 @@ nav:
   - 'Fields': usage/fields.md
   - 'JSON Schema': usage/json_schema.md
   - 'Serialization': usage/serialization.md
-  - 'Computed Fields': usage/computed_fields.md
   - 'Dataclasses': usage/dataclasses.md
   - 'TypeAdapter': usage/type_adapter.md
   - 'Validation Decorator': usage/validation_decorator.md
