@@ -1924,7 +1924,7 @@ def test_custom_generic_validators():
                     ) from exc
                 return v
 
-            return core_schema.general_after_validator_function(validate, schema)
+            return core_schema.with_info_after_validator_function(validate, schema)
 
     class Model(BaseModel):
         a: str
@@ -2560,6 +2560,23 @@ def test_type_union():
     m = Model(a=bytes, b=int)
     assert m.model_dump() == {'a': bytes, 'b': int}
     assert m.a == bytes
+
+
+def test_model_repr_before_validation():
+    log = []
+
+    class MyModel(BaseModel):
+        x: int
+
+        def __init__(self, **kwargs):
+            log.append(f'before={self!r}')
+            super().__init__(**kwargs)
+            log.append(f'after={self!r}')
+
+    m = MyModel(x='10')
+    assert m.x == 10
+    # insert_assert(log)
+    assert log == ['before=MyModel()', 'after=MyModel(x=10)']
 
 
 def test_custom_exception_handler():

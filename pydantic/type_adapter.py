@@ -20,6 +20,7 @@ from .json_schema import (
     JsonSchemaMode,
     JsonSchemaValue,
 )
+from .plugin._schema_validator import create_schema_validator
 
 T = TypeVar('T')
 
@@ -168,12 +169,14 @@ class TypeAdapter(Generic[T]):
 
         core_schema = _discriminated_union.apply_discriminators(_core_utils.simplify_schema_references(core_schema))
 
+        core_schema = _core_utils.validate_core_schema(core_schema)
+
         core_config = config_wrapper.core_config(None)
         validator: SchemaValidator
         try:
             validator = _getattr_no_parents(type, '__pydantic_validator__')
         except AttributeError:
-            validator = SchemaValidator(core_schema, core_config)
+            validator = create_schema_validator(core_schema, core_config, config_wrapper.plugin_settings)
 
         serializer: SchemaSerializer
         try:
@@ -220,6 +223,19 @@ class TypeAdapter(Generic[T]):
             The validated object.
         """
         return self.validator.validate_json(__data, strict=strict, context=context)
+
+    def validate_strings(self, __obj: Any, *, strict: bool | None = None, context: dict[str, Any] | None = None) -> T:
+        """Validate object contains string data against the model.
+
+        Args:
+            __obj: The object contains string data to validate.
+            strict: Whether to strictly check types.
+            context: Additional context to use during validation.
+
+        Returns:
+            The validated object.
+        """
+        return self.validator.validate_strings(__obj, strict=strict, context=context)
 
     def get_default_value(self, *, strict: bool | None = None, context: dict[str, Any] | None = None) -> Some[T] | None:
         """Get the default value for the wrapped type.
