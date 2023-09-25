@@ -1,5 +1,6 @@
 from __future__ import annotations as _annotations
 
+import argparse
 import json
 import re
 import subprocess
@@ -12,9 +13,17 @@ import requests
 
 def main():
     root_dir = Path(__file__).parent.parent
-    version_file = root_dir / 'pydantic' / 'version.py'
 
-    new_version = re.search(r"VERSION = '(.*)'", version_file.read_text()).group(1)
+    parser = argparse.ArgumentParser()
+    # For easier iteration, can generate the release notes without saving
+    parser.add_argument('--preview', help='print preview of release notes to terminal without saving to HISTORY.md')
+    args = parser.parse_args()
+
+    if args.preview:
+        new_version = args.preview
+    else:
+        version_file = root_dir / 'pydantic' / 'version.py'
+        new_version = re.search(r"VERSION = '(.*)'", version_file.read_text()).group(1)
 
     history_path = root_dir / 'HISTORY.md'
     history_content = history_path.read_text()
@@ -30,6 +39,9 @@ def main():
         f'[GitHub release](https://github.com/pydantic/pydantic/releases/tag/v{new_version})\n\n'
         f'{notes}\n\n'
     )
+    if args.preview:
+        print(new_chunk)
+        return
     history = new_chunk + history_content
 
     history_path.write_text(history)
@@ -55,6 +67,13 @@ def get_notes(new_version: str) -> str:
     body = response.json()['body']
     body = body.removeprefix('<!-- Release notes generated using configuration in .github/release.yml at main -->\n\n')
 
+    # Add one level to all headers so they match HISTORY.md, and add trailing newline
+    body = re.sub(pattern='^(#+ .+?)$', repl=r'#\1\n', string=body, flags=re.MULTILINE)
+
+    # Ensure a blank line before headers
+    body = re.sub(pattern='([^\n])(\n#+ .+?\n)', repl=r'\1\n\2', string=body)
+
+    # Render PR links nicely
     body = re.sub(
         pattern='https://github.com/pydantic/pydantic/pull/(\\d+)',
         repl=r'[#\1](https://github.com/pydantic/pydantic/pull/\1)',
