@@ -33,7 +33,7 @@ from typing import (
 )
 from warnings import warn
 
-from pydantic_core import CoreSchema, PydanticUndefined, core_schema
+from pydantic_core import CoreSchema, PydanticUndefined, core_schema, to_jsonable_python
 from typing_extensions import Annotated, Final, Literal, TypeAliasType, TypedDict, get_args, get_origin, is_typeddict
 
 from ..annotated_handlers import GetCoreSchemaHandler, GetJsonSchemaHandler
@@ -50,10 +50,10 @@ from ._core_metadata import (
     build_metadata_dict,
 )
 from ._core_utils import (
-    HAS_INVALID_SCHEMAS_METADATA_KEY,
     NEEDS_APPLY_DISCRIMINATED_UNION_METADATA_KEY,
     CoreSchemaOrField,
     define_expected_missing_refs,
+    get_ref,
     get_type_ref,
     is_list_like_schema_with_items_schema,
 )
@@ -396,6 +396,8 @@ class GenerateSchema:
         ref = cast('str | None', schema.get('ref', None))
         if ref:
             self.defs.definitions[ref] = schema
+        if 'ref' in schema:
+            schema = core_schema.definition_reference_schema(schema['ref'])
         return core_schema.definitions_schema(
             schema,
             list(self.defs.definitions.values()),
@@ -532,10 +534,6 @@ class GenerateSchema:
                     new_inner_schema = define_expected_missing_refs(inner_schema, recursively_defined_type_refs())
                     if new_inner_schema is not None:
                         inner_schema = new_inner_schema
-                        self._has_invalid_schema = True
-                        metadata[HAS_INVALID_SCHEMAS_METADATA_KEY] = True
-                    else:
-                        metadata[HAS_INVALID_SCHEMAS_METADATA_KEY] = False
                     inner_schema = apply_model_validators(inner_schema, model_validators, 'inner')
 
                     model_schema = core_schema.model_schema(
@@ -605,7 +603,7 @@ class GenerateSchema:
 
         schema = self._unpack_refs_defs(schema)
 
-        ref: str | None = schema.get('ref', None)
+        ref = get_ref(schema)
         if ref:
             self.defs.definitions[ref] = self._post_process_generated_schema(schema)
             return core_schema.definition_reference_schema(ref)
@@ -671,11 +669,9 @@ class GenerateSchema:
         if 'metadata' in schema:
             metadata = schema['metadata']
             metadata[NEEDS_APPLY_DISCRIMINATED_UNION_METADATA_KEY] = self._needs_apply_discriminated_union
-            metadata[HAS_INVALID_SCHEMAS_METADATA_KEY] = self._has_invalid_schema
         else:
             schema['metadata'] = {
                 NEEDS_APPLY_DISCRIMINATED_UNION_METADATA_KEY: self._needs_apply_discriminated_union,
-                HAS_INVALID_SCHEMAS_METADATA_KEY: self._has_invalid_schema,
             }
         return schema
 
@@ -957,7 +953,7 @@ class GenerateSchema:
         json_schema_updates = {
             'title': field_info.title,
             'description': field_info.description,
-            'examples': field_info.examples,
+            'examples': to_jsonable_python(field_info.examples),
         }
         json_schema_updates = {k: v for k, v in json_schema_updates.items() if v is not None}
 
@@ -966,7 +962,7 @@ class GenerateSchema:
         def json_schema_update_func(schema: CoreSchemaOrField, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
             json_schema = {**handler(schema), **json_schema_updates}
             if isinstance(json_schema_extra, dict):
-                json_schema.update(json_schema_extra)
+                json_schema.update(to_jsonable_python(json_schema_extra))
             elif callable(json_schema_extra):
                 json_schema_extra(json_schema)
             return json_schema
@@ -1264,12 +1260,6 @@ class GenerateSchema:
         """Generate schema for a Sequence, e.g. `Sequence[int]`."""
         item_type = self._get_first_arg_or_any(sequence_type)
 
-        def json_schema_func(_schema: CoreSchemaOrField, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
-            items_schema = self._generate_schema(item_type)
-            return handler(core_schema.list_schema(items_schema))
-
-        metadata = build_metadata_dict(js_functions=[json_schema_func])
-
         list_schema = core_schema.list_schema(self.generate_schema(item_type))
         python_schema = core_schema.is_instance_schema(typing.Sequence, cls_repr='Sequence')
         if item_type != Any:
@@ -1278,9 +1268,7 @@ class GenerateSchema:
             python_schema = core_schema.chain_schema(
                 [python_schema, core_schema.no_info_wrap_validator_function(sequence_validator, list_schema)],
             )
-        return core_schema.json_or_python_schema(
-            json_schema=list_schema, python_schema=python_schema, metadata=metadata
-        )
+        return core_schema.json_or_python_schema(json_schema=list_schema, python_schema=python_schema)
 
     def _iterable_schema(self, type_: Any) -> core_schema.GeneratorSchema:
         """Generate a schema for an `Iterable`."""
@@ -1659,7 +1647,7 @@ class GenerateSchema:
             if metadata.description:
                 json_schema_update['description'] = metadata.description
             if metadata.examples:
-                json_schema_update['examples'] = metadata.examples
+                json_schema_update['examples'] = to_jsonable_python(metadata.examples)
 
             json_schema_extra = metadata.json_schema_extra
             if json_schema_update or json_schema_extra:
@@ -1670,7 +1658,7 @@ class GenerateSchema:
                     json_schema = handler(core_schema)
                     json_schema.update(json_schema_update)
                     if isinstance(json_schema_extra, dict):
-                        json_schema.update(json_schema_extra)
+                        json_schema.update(to_jsonable_python(json_schema_extra))
                     elif callable(json_schema_extra):
                         json_schema_extra(json_schema)
                     return json_schema

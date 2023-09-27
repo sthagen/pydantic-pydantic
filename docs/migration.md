@@ -134,6 +134,9 @@ The `pydantic.generics.GenericModel` class is no longer necessary, and has been 
 create generic `BaseModel` subclasses by just adding `Generic` as a parent class on a `BaseModel` subclass directly.
 This looks like `class MyGenericModel(BaseModel, Generic[T]): ...`.
 
+Mixing of V1 and V2 models is not supported which means that type parameters of such generic `BaseModel` (V2)
+cannot be V1 models.
+
 While it may not raise an error, we strongly advise against using _parametrized_ generics in `isinstance` checks.
 
   * For example, you should not do `isinstance(my_model, MyGenericModel[int])`.
@@ -198,13 +201,17 @@ dataclasses without having to subclass `BaseModel`. Pydantic V2 introduces the f
 
 * The following config settings have been removed:
     * `allow_mutation` — this has been removed. You should be able to use [frozen](api/config.md#pydantic.config.ConfigDict) equivalently (inverse of current use).
-    * `error_msg_templates`.
+    * `error_msg_templates`
     * `fields` — this was the source of various bugs, so has been removed.
       You should be able to use `Annotated` on fields to modify them as desired.
     * `getter_dict` — `orm_mode` has been removed, and this implementation detail is no longer necessary.
     * `smart_union`.
     * `underscore_attrs_are_private` — the Pydantic V2 behavior is now the same as if this was always set
       to `True` in Pydantic V1.
+    * `json_loads`
+    * `json_dumps`
+    * `copy_on_model_validation`
+    * `post_init_call`
 
 * The following config settings have been renamed:
     * `allow_population_by_field_name` → `populate_by_name`

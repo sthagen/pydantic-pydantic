@@ -52,7 +52,7 @@ jobs:
         python-version: '3.8'
 
     - name: install dependencies
-      # Unlike the docs build, we don't use mkdocs_material-9.2.8+insiders.4.40.4-py3-none-any.whl
+      # Unlike the docs build, we don't use mkdocs_material-insiders
       # Because the secret for accessing the library is not accessible from forks, but we still want to run
       # this job on public CI runs.
       run: |
@@ -200,6 +200,11 @@ jobs:
       - run: pdm run pytest ./tests/plugin
         env:
           TEST_PLUGIN: 1
+
+      # uninstalling is necessary to avoid creating a pdm cache shared with other jobs
+      # which includes the plugin
+      - name: uninstall example plugin
+        run: pdm remove ./tests/plugin
 
   test-mypy:
     name: mypy ${{ matrix.mypy-version }} / ${{ matrix.python-version }}
