@@ -1,12 +1,11 @@
 import datetime
-import sys
 from typing import Dict, List, Tuple, TypeVar, Union
 
 import pytest
 from annotated_types import MaxLen
 from typing_extensions import Annotated, TypeAliasType
 
-from pydantic import Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from pydantic.type_adapter import TypeAdapter
 
 T = TypeVar('T')
@@ -134,7 +133,6 @@ def test_recursive_type_alias() -> None:
     }
 
 
-@pytest.mark.xfail(sys.version_info >= (3, 12), reason="TypeAliasType doesn't have __qualname__ yet")
 def test_type_alias_annotated() -> None:
     t = TypeAdapter(ShortMyList[int])
 
@@ -155,7 +153,6 @@ def test_type_alias_annotated() -> None:
     assert t.json_schema() == {'type': 'array', 'items': {'type': 'integer'}, 'maxItems': 1}
 
 
-@pytest.mark.xfail(sys.version_info >= (3, 12), reason="TypeAliasType doesn't have __qualname__ yet")
 def test_type_alias_annotated_defs() -> None:
     # force use of refs by referencing the schema in multiple places
     t = TypeAdapter(Tuple[ShortMyList[int], ShortMyList[int]])
@@ -185,11 +182,11 @@ def test_type_alias_annotated_defs() -> None:
         'type': 'array',
         'minItems': 2,
         'prefixItems': [
-            {'$ref': '#/$defs/MyList_MaxLen_max_length_1_'},
-            {'$ref': '#/$defs/MyList_MaxLen_max_length_1_'},
+            {'$ref': '#/$defs/MyList_int__MaxLen_max_length_1_'},
+            {'$ref': '#/$defs/MyList_int__MaxLen_max_length_1_'},
         ],
         'maxItems': 2,
-        '$defs': {'MyList_MaxLen_max_length_1_': {'type': 'array', 'items': {'type': 'integer'}, 'maxItems': 1}},
+        '$defs': {'MyList_int__MaxLen_max_length_1_': {'type': 'array', 'items': {'type': 'integer'}, 'maxItems': 1}},
     }
 
 
@@ -223,17 +220,16 @@ def test_recursive_generic_type_alias() -> None:
     ]
 
     assert t.json_schema() == {
-        'allOf': [{'$ref': '#/$defs/RecursiveGenericAlias'}],
+        'allOf': [{'$ref': '#/$defs/RecursiveGenericAlias_int_'}],
         '$defs': {
-            'RecursiveGenericAlias': {
+            'RecursiveGenericAlias_int_': {
                 'type': 'array',
-                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias'}, {'type': 'integer'}]},
+                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias_int_'}, {'type': 'integer'}]},
             }
         },
     }
 
 
-@pytest.mark.xfail(sys.version_info >= (3, 12), reason="TypeAliasType doesn't have __qualname__ yet")
 def test_recursive_generic_type_alias_annotated() -> None:
     t = TypeAdapter(ShortRecursiveGenericAlias[int])
 
@@ -254,18 +250,17 @@ def test_recursive_generic_type_alias_annotated() -> None:
     # insert_assert(t.json_schema())
     assert t.json_schema() == {
         'type': 'array',
-        'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias'}, {'type': 'integer'}]},
+        'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias_int_'}, {'type': 'integer'}]},
         'maxItems': 1,
         '$defs': {
-            'RecursiveGenericAlias': {
+            'RecursiveGenericAlias_int_': {
                 'type': 'array',
-                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias'}, {'type': 'integer'}]},
+                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias_int_'}, {'type': 'integer'}]},
             }
         },
     }
 
 
-@pytest.mark.xfail(sys.version_info >= (3, 12), reason="TypeAliasType doesn't have __qualname__ yet")
 def test_recursive_generic_type_alias_annotated_defs() -> None:
     # force use of refs by referencing the schema in multiple places
     t = TypeAdapter(Tuple[ShortRecursiveGenericAlias[int], ShortRecursiveGenericAlias[int]])
@@ -289,18 +284,18 @@ def test_recursive_generic_type_alias_annotated_defs() -> None:
         'type': 'array',
         'minItems': 2,
         'prefixItems': [
-            {'$ref': '#/$defs/RecursiveGenericAlias_MaxLen_max_length_1_'},
-            {'$ref': '#/$defs/RecursiveGenericAlias_MaxLen_max_length_1_'},
+            {'$ref': '#/$defs/RecursiveGenericAlias_int__MaxLen_max_length_1_'},
+            {'$ref': '#/$defs/RecursiveGenericAlias_int__MaxLen_max_length_1_'},
         ],
         'maxItems': 2,
         '$defs': {
-            'RecursiveGenericAlias': {
+            'RecursiveGenericAlias_int_': {
                 'type': 'array',
-                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias'}, {'type': 'integer'}]},
+                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias_int_'}, {'type': 'integer'}]},
             },
-            'RecursiveGenericAlias_MaxLen_max_length_1_': {
+            'RecursiveGenericAlias_int__MaxLen_max_length_1_': {
                 'type': 'array',
-                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias'}, {'type': 'integer'}]},
+                'items': {'anyOf': [{'$ref': '#/$defs/RecursiveGenericAlias_int_'}, {'type': 'integer'}]},
                 'maxItems': 1,
             },
         },
@@ -319,3 +314,26 @@ def test_field() -> None:
         'allOf': [{'$ref': '#/$defs/SomeAlias'}],
         'title': 'abc',
     }
+
+
+def test_nested_generic_type_alias_type() -> None:
+    class MyModel(BaseModel):
+        field_1: MyList[bool]
+        field_2: MyList[str]
+
+    model = MyModel(field_1=[True], field_2=['abc'])
+
+    assert model.model_json_schema() == {
+        '$defs': {
+            'MyList_bool_': {'items': {'type': 'boolean'}, 'type': 'array'},
+            'MyList_str_': {'items': {'type': 'string'}, 'type': 'array'},
+        },
+        'properties': {'field_1': {'$ref': '#/$defs/MyList_bool_'}, 'field_2': {'$ref': '#/$defs/MyList_str_'}},
+        'required': ['field_1', 'field_2'],
+        'title': 'MyModel',
+        'type': 'object',
+    }
+
+
+def test_non_specified_generic_type_alias_type() -> None:
+    assert TypeAdapter(MyList).json_schema() == {'items': {}, 'type': 'array'}
