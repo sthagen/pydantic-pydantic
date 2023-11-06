@@ -1495,8 +1495,6 @@ class _SecretField(Generic[SecretType]):
 
 
 def _secret_display(value: str | bytes) -> str:
-    if isinstance(value, bytes):
-        value = value.decode()
     return '**********' if value else ''
 
 
@@ -2444,6 +2442,8 @@ class GetPydanticSchema:
 class Tag:
     """Provides a way to specify the expected tag to use for a case with a callable discriminated union.
 
+    Also provides a way to label a union case in error messages.
+
     When using a `CallableDiscriminator`, attach a `Tag` to each case in the `Union` to specify the tag that
     should be used to identify that case. For example, in the below example, the `Tag` is used to specify that
     if `get_discriminator_value` returns `'apple'`, the input should be validated as an `ApplePie`, and if it
@@ -2452,10 +2452,10 @@ class Tag:
     The primary role of the `Tag` here is to map the return value from the `CallableDiscriminator` function to
     the appropriate member of the `Union` in question.
 
-    ```py requires="3.8"
-    from typing import Any, Literal, Union
+    ```py
+    from typing import Any, Union
 
-    from typing_extensions import Annotated
+    from typing_extensions import Annotated, Literal
 
     from pydantic import BaseModel, CallableDiscriminator, Tag
 
@@ -2511,7 +2511,7 @@ class Tag:
         Failing to do so will result in a `PydanticUserError` with code
         [`callable-discriminator-no-tag`](../errors/usage_errors.md#callable-discriminator-no-tag).
 
-    See the [Discriminated Unions](../api/standard_library_types.md#discriminated-unions-aka-tagged-unions)
+    See the [Discriminated Unions](../concepts/unions.md#discriminated-unions)
     docs for more details on how to use `Tag`s.
     """
 
@@ -2538,10 +2538,10 @@ class CallableDiscriminator:
     Consider this example, which is much more performant with the use of `CallableDiscriminator` and thus a `TaggedUnion`
     than it would be as a normal `Union`.
 
-    ```py requires="3.8"
-    from typing import Any, Literal, Union
+    ```py
+    from typing import Any, Union
 
-    from typing_extensions import Annotated
+    from typing_extensions import Annotated, Literal
 
     from pydantic import BaseModel, CallableDiscriminator, Tag
 
@@ -2592,7 +2592,7 @@ class CallableDiscriminator:
     '''
     ```
 
-    See the [Discriminated Unions](../api/standard_library_types.md#discriminated-unions-aka-tagged-unions)
+    See the [Discriminated Unions](../concepts/unions.md#discriminated-unions)
     docs for more details on how to use `CallableDiscriminator`s.
     """
 
