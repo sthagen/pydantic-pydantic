@@ -452,12 +452,12 @@ except ValidationError as e:
     """
 
 try:
-    m = User.model_validate_json('Invalid JSON')
+    m = User.model_validate_json('invalid JSON')
 except ValidationError as e:
     print(e)
     """
     1 validation error for User
-      Invalid JSON: expected value at line 1 column 1 [type=json_invalid, input_value='Invalid JSON', input_type=str]
+      Invalid JSON: expected value at line 1 column 1 [type=json_invalid, input_value='invalid JSON', input_type=str]
     """
 ```
 
@@ -620,11 +620,6 @@ from pydantic import BaseModel, ValidationError
 DataT = TypeVar('DataT')
 
 
-class Error(BaseModel):
-    code: int
-    message: str
-
-
 class DataModel(BaseModel):
     numbers: List[int]
     people: List[str]
@@ -635,7 +630,6 @@ class Response(BaseModel, Generic[DataT]):
 
 
 data = DataModel(numbers=[1, 2, 3], people=[])
-error = Error(code=404, message='Not found')
 
 print(Response[int](data=1))
 #> data=1

@@ -64,7 +64,7 @@ class _FromFieldInfoInputs(typing_extensions.TypedDict, total=False):
     max_digits: int | None
     decimal_places: int | None
     union_mode: Literal['smart', 'left_to_right'] | None
-    discriminator: str | types.CallableDiscriminator | None
+    discriminator: str | types.Discriminator | None
     json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None
     frozen: bool | None
     validate_default: bool | None
@@ -101,7 +101,7 @@ class FieldInfo(_repr.Representation):
         description: The description of the field.
         examples: List of examples of the field.
         exclude: Whether to exclude the field from the model serialization.
-        discriminator: Field name or CallableDiscriminator for discriminating the type in a tagged union.
+        discriminator: Field name or Discriminator for discriminating the type in a tagged union.
         json_schema_extra: Dictionary of extra JSON schema properties.
         frozen: Whether the field is frozen.
         validate_default: Whether to validate the default value of the field.
@@ -122,7 +122,7 @@ class FieldInfo(_repr.Representation):
     description: str | None
     examples: list[Any] | None
     exclude: bool | None
-    discriminator: str | types.CallableDiscriminator | None
+    discriminator: str | types.Discriminator | None
     json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None
     frozen: bool | None
     validate_default: bool | None
@@ -682,7 +682,7 @@ def Field(  # noqa: C901
     description: str | None = _Unset,
     examples: list[Any] | None = _Unset,
     exclude: bool | None = _Unset,
-    discriminator: str | types.CallableDiscriminator | None = _Unset,
+    discriminator: str | types.Discriminator | None = _Unset,
     json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None = _Unset,
     frozen: bool | None = _Unset,
     validate_default: bool | None = _Unset,
@@ -727,7 +727,7 @@ def Field(  # noqa: C901
         description: Human-readable description.
         examples: Example values for this field.
         exclude: Whether to exclude the field from the model serialization.
-        discriminator: Field name or CallableDiscriminator for discriminating the type in a tagged union.
+        discriminator: Field name or Discriminator for discriminating the type in a tagged union.
         json_schema_extra: Any additional JSON schema data for the schema property.
         frozen: Whether the field is frozen.
         validate_default: Run validation that isn't only checking existence of defaults. This can be set to `True` or `False`. If not set, it defaults to `None`.
@@ -962,6 +962,8 @@ class ComputedFieldInfo:
         alias_priority: priority of the alias. This affects whether an alias generator is used
         title: Title of the computed field as in OpenAPI document, should be a short summary.
         description: Description of the computed field as in OpenAPI document.
+        examples: Example values of the computed field as in OpenAPI document.
+        json_schema_extra: Dictionary of extra JSON schema properties.
         repr: A boolean indicating whether or not to include the field in the __repr__ output.
     """
 
@@ -972,6 +974,8 @@ class ComputedFieldInfo:
     alias_priority: int | None
     title: str | None
     description: str | None
+    examples: list[Any] | None
+    json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None
     repr: bool
 
 
@@ -983,12 +987,14 @@ PropertyT = typing.TypeVar('PropertyT')
 @typing.overload
 def computed_field(
     *,
-    return_type: Any = PydanticUndefined,
     alias: str | None = None,
     alias_priority: int | None = None,
     title: str | None = None,
     description: str | None = None,
+    examples: list[Any] | None = None,
+    json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None = None,
     repr: bool = True,
+    return_type: Any = PydanticUndefined,
 ) -> typing.Callable[[PropertyT], PropertyT]:
     ...
 
@@ -1017,6 +1023,8 @@ def computed_field(
     alias_priority: int | None = None,
     title: str | None = None,
     description: str | None = None,
+    examples: list[Any] | None = None,
+    json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None = None,
     repr: bool | None = None,
     return_type: Any = PydanticUndefined,
 ) -> PropertyT | typing.Callable[[PropertyT], PropertyT]:
@@ -1140,9 +1148,11 @@ def computed_field(
         __f: the function to wrap.
         alias: alias to use when serializing this computed field, only used when `by_alias=True`
         alias_priority: priority of the alias. This affects whether an alias generator is used
-        title: Title to used when including this computed field in JSON Schema, currently unused waiting for #4697
-        description: Description to used when including this computed field in JSON Schema, defaults to the functions
-            docstring, currently unused waiting for #4697
+        title: Title to use when including this computed field in JSON Schema
+        description: Description to use when including this computed field in JSON Schema, defaults to the function's
+            docstring
+        examples: Example values to use when including this computed field in JSON Schema
+        json_schema_extra: Dictionary of extra JSON schema properties.
         repr: whether to include this computed field in model repr.
             Default is `False` for private properties and `True` for public properties.
         return_type: optional return for serialization logic to expect when serializing to JSON, if included
@@ -1169,7 +1179,9 @@ def computed_field(
         else:
             repr_ = repr
 
-        dec_info = ComputedFieldInfo(f, return_type, alias, alias_priority, title, description, repr_)
+        dec_info = ComputedFieldInfo(
+            f, return_type, alias, alias_priority, title, description, examples, json_schema_extra, repr_
+        )
         return _decorators.PydanticDescriptorProxy(f, dec_info)
 
     if __f is None:

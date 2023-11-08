@@ -1,14 +1,16 @@
 Unions are fundamentally different to all other types Pydantic validates - instead of requiring all fields/items/values to be valid, unions require only one member to be valid.
 
 This leads to some nuance around how to validate unions:
+
 * which member(s) of the union should you validate data against, and in which order?
 * which errors to raise when validation fails?
 
 Validating unions feels like adding another orthogonal dimension to the validation process.
 
 To solve these problems, Pydantic supports three fundamental approaches to validating unions:
+
 1. [left to right mode](#left-to-right-mode) - the simplest approach, each member of the union is tried in order
-2. [smart mode](#smart-mode) - as with "left to right mode" all members are tried, but strict validation is used to try to find the best match
+2. [smart mode](#smart-mode) - as with "left to right mode" all members are tried, but strict validation is used to try to find the best match, this is the default mode for most union validation
 3. [discriminated unions](#discriminated-unions) - only one member of the union is tried, based on a discriminator
 
 ## Union Modes
@@ -130,7 +132,7 @@ We can use discriminated unions to more efficiently validate `Union` types, by c
 
 This makes validation more efficient and also avoids a proliferation of errors when validation fails.
 
-Add ing disciminator to unions also means the generated JSON schema implements the [associated OpenAPI specification](https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#discriminator-object)
+Adding discriminator to unions also means the generated JSON schema implements the [associated OpenAPI specification](https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#discriminator-object).
 
 ### Discriminated Unions with `str` discriminators
 
@@ -182,17 +184,18 @@ except ValidationError as e:
     """
 ```
 
-### Discriminated Unions with `CallableDiscriminator` discriminators
+### Discriminated Unions with callable `Discriminator`s
 
 In the case of a `Union` with multiple models, sometimes there isn't a single uniform field
-across all models that you can use as a discriminator. This is the perfect use case for the `CallableDiscriminator` approach.
+across all models that you can use as a discriminator.
+This is the perfect use case for a callable `Discriminator`.
 
 ```py requires="3.8"
 from typing import Any, Literal, Union
 
 from typing_extensions import Annotated
 
-from pydantic import BaseModel, CallableDiscriminator, Tag
+from pydantic import BaseModel, Discriminator, Tag
 
 
 class Pie(BaseModel):
@@ -220,7 +223,7 @@ class ThanksgivingDinner(BaseModel):
             Annotated[ApplePie, Tag('apple')],
             Annotated[PumpkinPie, Tag('pumpkin')],
         ],
-        CallableDiscriminator(get_discriminator_value),
+        Discriminator(get_discriminator_value),
     ]
 
 
@@ -247,7 +250,7 @@ ThanksgivingDinner(dessert=PumpkinPie(time_to_cook=40, num_ingredients=6, fillin
 """
 ```
 
-`CallableDiscriminators` can also be used to validate `Union` types with combinations of models and primitive types.
+`Discriminator`s can also be used to validate `Union` types with combinations of models and primitive types.
 
 For example:
 
@@ -256,7 +259,7 @@ from typing import Any, Union
 
 from typing_extensions import Annotated
 
-from pydantic import BaseModel, CallableDiscriminator, Tag
+from pydantic import BaseModel, Discriminator, Tag
 
 
 def model_x_discriminator(v: Any) -> str:
@@ -272,7 +275,7 @@ class DiscriminatedModel(BaseModel):
             Annotated[str, Tag('str')],
             Annotated['DiscriminatedModel', Tag('model')],
         ],
-        CallableDiscriminator(
+        Discriminator(
             model_x_discriminator,
             custom_error_type='invalid_union_member',
             custom_error_message='Invalid union member',
@@ -301,11 +304,11 @@ assert m.model_dump() == data
     some_field: Annotated[Union[...], Field(discriminator='my_discriminator')]
     ```
 
-    For `CallableDiscriminator` discriminators:
+    For callable `Discriminator`s:
     ```
-    some_field: Union[...] = Field(discriminator=CallableDiscriminator(...))
-    some_field: Annotated[Union[...], CallableDiscriminator(...)]
-    some_field: Annotated[Union[...], Field(discriminator=CallableDiscriminator(...))]
+    some_field: Union[...] = Field(discriminator=Discriminator(...))
+    some_field: Annotated[Union[...], Discriminator(...)]
+    some_field: Annotated[Union[...], Field(discriminator=Discriminator(...))]
     ```
 
 !!! warning
@@ -388,7 +391,7 @@ from typing import Union
 
 from typing_extensions import Annotated
 
-from pydantic import BaseModel, CallableDiscriminator, Tag, ValidationError
+from pydantic import BaseModel, Discriminator, Tag, ValidationError
 
 
 # Errors are quite verbose with a normal Union:
@@ -472,7 +475,7 @@ class DiscriminatedModel(BaseModel):
             Annotated[str, Tag('str')],
             Annotated['DiscriminatedModel', Tag('model')],
         ],
-        CallableDiscriminator(
+        Discriminator(
             model_x_discriminator,
             custom_error_type='invalid_union_member',
             custom_error_message='Invalid union member',
