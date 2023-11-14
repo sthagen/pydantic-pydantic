@@ -1,12 +1,15 @@
-## v2.5.0b1 (2023-11-09)
+## v2.5.0 (2023-11-13)
 
-[GitHub release](https://github.com/pydantic/pydantic/releases/tag/v2.5.0b1)
+[GitHub release](https://github.com/pydantic/pydantic/releases/tag/v2.5.0)
+
+The code released in v2.5.0 is functionally identical to that of v2.5.0b1.
 
 ### What's Changed
 
 #### Packaging
 
 * Update pydantic-core from 2.10.1 to 2.14.1, significant changes from these updates are described below, full changelog [here](https://github.com/pydantic/pydantic-core/compare/v2.10.1...v2.14.1)
+* Update to `pyright==1.1.335` by @Viicos in [#8075](https://github.com/pydantic/pydantic/pull/8075)
 
 #### New Features
 
@@ -115,6 +118,10 @@
 #### `pydantic-core`
 * @sisp made their first contribution in [pydantic/pydantic-core#995](https://github.com/pydantic/pydantic-core/pull/995)
 * @michaelhly made their first contribution in [pydantic/pydantic-core#1015](https://github.com/pydantic/pydantic-core/pull/1015)
+
+## v2.5.0b1 (2023-11-09)
+
+Pre-release, see [the GitHub release](https://github.com/pydantic/pydantic/releases/tag/v2.5.0b1) for details.
 
 ## v2.4.2 (2023-09-27)
 
@@ -513,6 +520,8 @@ See the full changelog [here](https://github.com/pydantic/pydantic/releases/tag/
 First pre-release of Pydantic V2!
 
 See [this post](https://docs.pydantic.dev/blog/pydantic-v2-alpha/) for more details.
+
+<!-- package description limit -->
 
 ## v1.10.13 (2023-09-27)
 
@@ -1335,8 +1344,6 @@ Thank you to pydantic's sponsors: @matin, @tiangolo, @chdsbd, @jorgecarleitao, a
 * Only check `TypeVar` param on base `GenericModel` class, [#842](https://github.com/pydantic/pydantic/pull/842) by @zpencerq
 * rename `Model._schema_cache` -> `Model.__schema_cache__`, `Model._json_encoder` -> `Model.__json_encoder__`,
   `Model._custom_root_type` -> `Model.__custom_root_type__`, [#851](https://github.com/pydantic/pydantic/pull/851) by @samuelcolvin
-
-<!-- package description limit -->
 
 ## v0.32.2 (2019-08-17)
 
