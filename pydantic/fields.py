@@ -96,7 +96,7 @@ class FieldInfo(_repr.Representation):
         examples: List of examples of the field.
         exclude: Whether to exclude the field from the model serialization.
         discriminator: Field name or Discriminator for discriminating the type in a tagged union.
-        json_schema_extra: Dictionary of extra JSON schema properties.
+        json_schema_extra: A dict or callable to provide extra JSON schema properties.
         frozen: Whether the field is frozen.
         validate_default: Whether to validate the default value of the field.
         repr: Whether to include the field in representation of the model.
@@ -207,10 +207,8 @@ class FieldInfo(_repr.Representation):
 
         self.metadata = self._collect_metadata(kwargs) + annotation_metadata  # type: ignore
 
-    @classmethod
-    def from_field(
-        cls, default: Any = PydanticUndefined, **kwargs: Unpack[_FromFieldInfoInputs]
-    ) -> typing_extensions.Self:
+    @staticmethod
+    def from_field(default: Any = PydanticUndefined, **kwargs: Unpack[_FromFieldInfoInputs]) -> FieldInfo:
         """Create a new `FieldInfo` object with the `Field` function.
 
         Args:
@@ -235,10 +233,10 @@ class FieldInfo(_repr.Representation):
         """
         if 'annotation' in kwargs:
             raise TypeError('"annotation" is not permitted as a Field keyword argument')
-        return cls(default=default, **kwargs)
+        return FieldInfo(default=default, **kwargs)
 
-    @classmethod
-    def from_annotation(cls, annotation: type[Any]) -> FieldInfo:
+    @staticmethod
+    def from_annotation(annotation: type[Any]) -> FieldInfo:
         """Creates a `FieldInfo` instance from a bare annotation.
 
         Args:
@@ -283,7 +281,7 @@ class FieldInfo(_repr.Representation):
             if _typing_extra.is_finalvar(first_arg):
                 final = True
             field_info_annotations = [a for a in extra_args if isinstance(a, FieldInfo)]
-            field_info = cls.merge_field_infos(*field_info_annotations, annotation=first_arg)
+            field_info = FieldInfo.merge_field_infos(*field_info_annotations, annotation=first_arg)
             if field_info:
                 new_field_info = copy(field_info)
                 new_field_info.annotation = first_arg
@@ -297,10 +295,10 @@ class FieldInfo(_repr.Representation):
                 new_field_info.metadata = metadata
                 return new_field_info
 
-        return cls(annotation=annotation, frozen=final or None)
+        return FieldInfo(annotation=annotation, frozen=final or None)
 
-    @classmethod
-    def from_annotated_attribute(cls, annotation: type[Any], default: Any) -> FieldInfo:
+    @staticmethod
+    def from_annotated_attribute(annotation: type[Any], default: Any) -> FieldInfo:
         """Create `FieldInfo` from an annotation with a default value.
 
         Args:
@@ -329,11 +327,11 @@ class FieldInfo(_repr.Representation):
             if annotation is not typing_extensions.Final:
                 annotation = typing_extensions.get_args(annotation)[0]
 
-        if isinstance(default, cls):
-            default.annotation, annotation_metadata = cls._extract_metadata(annotation)
+        if isinstance(default, FieldInfo):
+            default.annotation, annotation_metadata = FieldInfo._extract_metadata(annotation)
             default.metadata += annotation_metadata
             default = default.merge_field_infos(
-                *[x for x in annotation_metadata if isinstance(x, cls)], default, annotation=default.annotation
+                *[x for x in annotation_metadata if isinstance(x, FieldInfo)], default, annotation=default.annotation
             )
             default.frozen = final or default.frozen
             return default
@@ -345,11 +343,11 @@ class FieldInfo(_repr.Representation):
             elif isinstance(annotation, dataclasses.InitVar):
                 init_var = True
                 annotation = annotation.type
-            pydantic_field = cls._from_dataclass_field(default)
-            pydantic_field.annotation, annotation_metadata = cls._extract_metadata(annotation)
+            pydantic_field = FieldInfo._from_dataclass_field(default)
+            pydantic_field.annotation, annotation_metadata = FieldInfo._extract_metadata(annotation)
             pydantic_field.metadata += annotation_metadata
             pydantic_field = pydantic_field.merge_field_infos(
-                *[x for x in annotation_metadata if isinstance(x, cls)],
+                *[x for x in annotation_metadata if isinstance(x, FieldInfo)],
                 pydantic_field,
                 annotation=pydantic_field.annotation,
             )
@@ -361,7 +359,7 @@ class FieldInfo(_repr.Representation):
             if _typing_extra.is_annotated(annotation):
                 first_arg, *extra_args = typing_extensions.get_args(annotation)
                 field_infos = [a for a in extra_args if isinstance(a, FieldInfo)]
-                field_info = cls.merge_field_infos(*field_infos, annotation=first_arg, default=default)
+                field_info = FieldInfo.merge_field_infos(*field_infos, annotation=first_arg, default=default)
                 metadata: list[Any] = []
                 for a in extra_args:
                     if not isinstance(a, FieldInfo):
@@ -371,7 +369,7 @@ class FieldInfo(_repr.Representation):
                 field_info.metadata = metadata
                 return field_info
 
-            return cls(annotation=annotation, default=default, frozen=final or None)
+            return FieldInfo(annotation=annotation, default=default, frozen=final or None)
 
     @staticmethod
     def merge_field_infos(*field_infos: FieldInfo, **overrides: Any) -> FieldInfo:
@@ -407,8 +405,8 @@ class FieldInfo(_repr.Representation):
         field_info.metadata = list(metadata.values())
         return field_info
 
-    @classmethod
-    def _from_dataclass_field(cls, dc_field: DataclassField[Any]) -> typing_extensions.Self:
+    @staticmethod
+    def _from_dataclass_field(dc_field: DataclassField[Any]) -> FieldInfo:
         """Return a new `FieldInfo` instance from a `dataclasses.Field` instance.
 
         Args:
@@ -433,8 +431,8 @@ class FieldInfo(_repr.Representation):
         dc_field_metadata = {k: v for k, v in dc_field.metadata.items() if k in _FIELD_ARG_NAMES}
         return Field(default=default, default_factory=default_factory, repr=dc_field.repr, **dc_field_metadata)
 
-    @classmethod
-    def _extract_metadata(cls, annotation: type[Any] | None) -> tuple[type[Any] | None, list[Any]]:
+    @staticmethod
+    def _extract_metadata(annotation: type[Any] | None) -> tuple[type[Any] | None, list[Any]]:
         """Tries to extract metadata/constraints from an annotation if it uses `Annotated`.
 
         Args:
@@ -450,8 +448,8 @@ class FieldInfo(_repr.Representation):
 
         return annotation, []
 
-    @classmethod
-    def _collect_metadata(cls, kwargs: dict[str, Any]) -> list[Any]:
+    @staticmethod
+    def _collect_metadata(kwargs: dict[str, Any]) -> list[Any]:
         """Collect annotations from kwargs.
 
         The return type is actually `annotated_types.BaseMetadata | PydanticMetadata`,
@@ -468,7 +466,7 @@ class FieldInfo(_repr.Representation):
         general_metadata = {}
         for key, value in list(kwargs.items()):
             try:
-                marker = cls.metadata_lookup[key]
+                marker = FieldInfo.metadata_lookup[key]
             except KeyError:
                 continue
 
@@ -719,7 +717,7 @@ def Field(  # noqa: C901
         examples: Example values for this field.
         exclude: Whether to exclude the field from the model serialization.
         discriminator: Field name or Discriminator for discriminating the type in a tagged union.
-        json_schema_extra: Any additional JSON schema data for the schema property.
+        json_schema_extra: A dict or callable to provide extra JSON schema properties.
         frozen: Whether the field is frozen.
         validate_default: Run validation that isn't only checking existence of defaults. This can be set to `True` or `False`. If not set, it defaults to `None`.
         repr: A boolean indicating whether to include the field in the `__repr__` output.
@@ -954,7 +952,7 @@ class ComputedFieldInfo:
         title: Title of the computed field as in OpenAPI document, should be a short summary.
         description: Description of the computed field as in OpenAPI document.
         examples: Example values of the computed field as in OpenAPI document.
-        json_schema_extra: Dictionary of extra JSON schema properties.
+        json_schema_extra: A dict or callable to provide extra JSON schema properties.
         repr: A boolean indicating whether or not to include the field in the __repr__ output.
     """
 
@@ -968,6 +966,18 @@ class ComputedFieldInfo:
     examples: list[Any] | None
     json_schema_extra: JsonDict | typing.Callable[[JsonDict], None] | None
     repr: bool
+
+
+def _wrapped_property_is_private(property_: cached_property | property) -> bool:  # type: ignore
+    """Returns true if provided property is private, False otherwise."""
+    wrapped_name: str = ''
+
+    if isinstance(property_, property):
+        wrapped_name = getattr(property_.fget, '__name__', '')
+    elif isinstance(property_, cached_property):  # type: ignore
+        wrapped_name = getattr(property_.func, '__name__', '')  # type: ignore
+
+    return wrapped_name.startswith('_') and not wrapped_name.startswith('__')
 
 
 # this should really be `property[T], cached_proprety[T]` but property is not generic unlike cached_property
@@ -995,18 +1005,6 @@ def computed_field(__func: PropertyT) -> PropertyT:
     ...
 
 
-def _wrapped_property_is_private(property_: cached_property | property) -> bool:  # type: ignore
-    """Returns true if provided property is private, False otherwise."""
-    wrapped_name: str = ''
-
-    if isinstance(property_, property):
-        wrapped_name = getattr(property_.fget, '__name__', '')
-    elif isinstance(property_, cached_property):  # type: ignore
-        wrapped_name = getattr(property_.func, '__name__', '')  # type: ignore
-
-    return wrapped_name.startswith('_') and not wrapped_name.startswith('__')
-
-
 def computed_field(
     __f: PropertyT | None = None,
     *,
@@ -1019,7 +1017,9 @@ def computed_field(
     repr: bool | None = None,
     return_type: Any = PydanticUndefined,
 ) -> PropertyT | typing.Callable[[PropertyT], PropertyT]:
-    """Decorator to include `property` and `cached_property` when serializing models or dataclasses.
+    """Usage docs: https://docs.pydantic.dev/2.6/concepts/fields#the-computed_field-decorator
+
+    Decorator to include `property` and `cached_property` when serializing models or dataclasses.
 
     This is useful for fields that are computed from other fields, or for fields that are expensive to compute and should be cached.
 
@@ -1143,7 +1143,7 @@ def computed_field(
         description: Description to use when including this computed field in JSON Schema, defaults to the function's
             docstring
         examples: Example values to use when including this computed field in JSON Schema
-        json_schema_extra: Dictionary of extra JSON schema properties.
+        json_schema_extra: A dict or callable to provide extra JSON schema properties.
         repr: whether to include this computed field in model repr.
             Default is `False` for private properties and `True` for public properties.
         return_type: optional return for serialization logic to expect when serializing to JSON, if included
