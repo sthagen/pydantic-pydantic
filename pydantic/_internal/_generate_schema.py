@@ -73,6 +73,7 @@ from ._decorators import (
     inspect_model_serializer,
     inspect_validator,
 )
+from ._docs_extraction import extract_docstrings_from_cls
 from ._fields import collect_dataclass_fields, get_type_hints_infer_globalns
 from ._forward_ref import PydanticRecursiveRef
 from ._generics import get_standard_typevars_map, has_instance_in_type, recursively_defined_type_refs, replace_types
@@ -1210,6 +1211,11 @@ class GenerateSchema:
 
                 decorators = DecoratorInfos.build(typed_dict_cls)
 
+                if self._config_wrapper.use_attribute_docstrings:
+                    field_docstrings = extract_docstrings_from_cls(typed_dict_cls, use_inspect=True)
+                else:
+                    field_docstrings = None
+
                 for field_name, annotation in get_type_hints_infer_globalns(
                     typed_dict_cls, localns=self._types_namespace, include_extras=True
                 ).items():
@@ -1230,6 +1236,12 @@ class GenerateSchema:
                         )[0]
 
                     field_info = FieldInfo.from_annotation(annotation)
+                    if (
+                        field_docstrings is not None
+                        and field_info.description is None
+                        and field_name in field_docstrings
+                    ):
+                        field_info.description = field_docstrings[field_name]
                     fields[field_name] = self._generate_td_field_schema(
                         field_name, field_info, decorators, required=required
                     )
@@ -1388,8 +1400,9 @@ class GenerateSchema:
     def _sequence_schema(self, sequence_type: Any) -> core_schema.CoreSchema:
         """Generate schema for a Sequence, e.g. `Sequence[int]`."""
         item_type = self._get_first_arg_or_any(sequence_type)
+        item_type_schema = self.generate_schema(item_type)
+        list_schema = core_schema.list_schema(item_type_schema)
 
-        list_schema = core_schema.list_schema(self.generate_schema(item_type))
         python_schema = core_schema.is_instance_schema(typing.Sequence, cls_repr='Sequence')
         if item_type != Any:
             from ._validators import sequence_validator
