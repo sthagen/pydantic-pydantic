@@ -402,6 +402,13 @@ class FieldInfo(_repr.Representation):
             # No merging necessary, but we still need to make a copy and apply the overrides
             field_info = copy(field_infos[0])
             field_info._attributes_set.update(overrides)
+
+            default_override = overrides.pop('default', PydanticUndefined)
+            if default_override is Ellipsis:
+                default_override = PydanticUndefined
+            if default_override is not PydanticUndefined:
+                field_info.default = default_override
+
             for k, v in overrides.items():
                 setattr(field_info, k, v)
             return field_info  # type: ignore
@@ -574,7 +581,9 @@ class FieldInfo(_repr.Representation):
                 continue
             if s == 'serialization_alias' and self.serialization_alias == self.alias:
                 continue
-            if s == 'default_factory' and self.default_factory is not None:
+            if s == 'default' and self.default is not PydanticUndefined:
+                yield 'default', self.default
+            elif s == 'default_factory' and self.default_factory is not None:
                 yield 'default_factory', _repr.PlainRepr(_repr.display_as_type(self.default_factory))
             else:
                 value = getattr(self, s)
