@@ -7,11 +7,12 @@ import types
 import typing
 import warnings
 from copy import copy, deepcopy
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Dict, Generator, Set, Tuple, TypeVar, Union
 
 import pydantic_core
 import typing_extensions
 from pydantic_core import PydanticUndefined
+from typing_extensions import TypeAlias
 
 from ._internal import (
     _config,
@@ -32,22 +33,25 @@ from .errors import PydanticUndefinedAnnotation, PydanticUserError
 from .json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaMode, JsonSchemaValue, model_json_schema
 from .warnings import PydanticDeprecatedSince20
 
+# Always define certain types that are needed to resolve method type hints/annotations
+# (even when not type checking) via typing.get_type_hints.
+Model = TypeVar('Model', bound='BaseModel')
+TupleGenerator = Generator[Tuple[str, Any], None, None]
+# should be `set[int] | set[str] | dict[int, IncEx] | dict[str, IncEx] | None`, but mypy can't cope
+IncEx: TypeAlias = Union[Set[int], Set[str], Dict[int, Any], Dict[str, Any], None]
+
+
 if typing.TYPE_CHECKING:
     from inspect import Signature
     from pathlib import Path
 
     from pydantic_core import CoreSchema, SchemaSerializer, SchemaValidator
-    from typing_extensions import Literal, Unpack
+    from typing_extensions import Unpack
 
     from ._internal._utils import AbstractSetIntStr, MappingIntStrAny
     from .deprecated.parse import Protocol as DeprecatedParseProtocol
     from .fields import ComputedFieldInfo, FieldInfo, ModelPrivateAttr
     from .fields import Field as _Field
-
-    TupleGenerator = typing.Generator[typing.Tuple[str, Any], None, None]
-    Model = typing.TypeVar('Model', bound='BaseModel')
-    # should be `set[int] | set[str] | dict[int, IncEx] | dict[str, IncEx] | None`, but mypy can't cope
-    IncEx: typing_extensions.TypeAlias = 'set[int] | set[str] | dict[int, Any] | dict[str, Any] | None'
 else:
     # See PyCharm issues https://youtrack.jetbrains.com/issue/PY-21915
     # and https://youtrack.jetbrains.com/issue/PY-51428
@@ -120,7 +124,7 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
         __pydantic_decorators__: ClassVar[_decorators.DecoratorInfos]
         __pydantic_generic_metadata__: ClassVar[_generics.PydanticGenericMetadata]
         __pydantic_parent_namespace__: ClassVar[dict[str, Any] | None]
-        __pydantic_post_init__: ClassVar[None | Literal['model_post_init']]
+        __pydantic_post_init__: ClassVar[None | typing_extensions.Literal['model_post_init']]
         __pydantic_root_model__: ClassVar[bool]
         __pydantic_serializer__: ClassVar[SchemaSerializer]
         __pydantic_validator__: ClassVar[SchemaValidator]
@@ -281,7 +285,7 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
     def model_dump(
         self,
         *,
-        mode: Literal['json', 'python'] | str = 'python',
+        mode: typing_extensions.Literal['json', 'python'] | str = 'python',
         include: IncEx = None,
         exclude: IncEx = None,
         by_alias: bool = False,
