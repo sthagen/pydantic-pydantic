@@ -974,60 +974,54 @@ def test_lax_or_strict_definitions() -> None:
     discriminated_schema = apply_discriminator(core_schema.union_schema([cat, dog]), 'kind')
     # insert_assert(discriminated_schema)
     assert discriminated_schema == {
-        'type': 'definitions',
-        'schema': {
-            'type': 'tagged-union',
-            'choices': {
-                'cat': {
+        'type': 'tagged-union',
+        'choices': {
+            'cat': {
+                'type': 'typed-dict',
+                'fields': {'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['cat']}}},
+            },
+            'DOG': {
+                'type': 'lax-or-strict',
+                'lax_schema': {
                     'type': 'typed-dict',
                     'fields': {
-                        'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['cat']}}
+                        'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['DOG']}}
                     },
                 },
-                'DOG': {
-                    'type': 'lax-or-strict',
-                    'lax_schema': {
+                'strict_schema': {
+                    'type': 'definitions',
+                    'schema': {
                         'type': 'typed-dict',
                         'fields': {
-                            'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['DOG']}}
+                            'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['dog']}}
                         },
                     },
-                    'strict_schema': {
-                        'type': 'definitions',
-                        'schema': {
-                            'type': 'typed-dict',
-                            'fields': {
-                                'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['dog']}}
-                            },
-                        },
-                        'definitions': [{'type': 'int', 'ref': 'my-int-definition'}],
-                    },
-                },
-                'dog': {
-                    'type': 'lax-or-strict',
-                    'lax_schema': {
-                        'type': 'typed-dict',
-                        'fields': {
-                            'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['DOG']}}
-                        },
-                    },
-                    'strict_schema': {
-                        'type': 'definitions',
-                        'schema': {
-                            'type': 'typed-dict',
-                            'fields': {
-                                'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['dog']}}
-                            },
-                        },
-                        'definitions': [{'type': 'int', 'ref': 'my-int-definition'}],
-                    },
+                    'definitions': [{'type': 'int', 'ref': 'my-int-definition'}],
                 },
             },
-            'discriminator': 'kind',
-            'strict': False,
-            'from_attributes': True,
+            'dog': {
+                'type': 'lax-or-strict',
+                'lax_schema': {
+                    'type': 'typed-dict',
+                    'fields': {
+                        'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['DOG']}}
+                    },
+                },
+                'strict_schema': {
+                    'type': 'definitions',
+                    'schema': {
+                        'type': 'typed-dict',
+                        'fields': {
+                            'kind': {'type': 'typed-dict-field', 'schema': {'type': 'literal', 'expected': ['dog']}}
+                        },
+                    },
+                    'definitions': [{'type': 'int', 'ref': 'my-int-definition'}],
+                },
+            },
         },
-        'definitions': [{'type': 'str', 'ref': 'my-str-definition'}],
+        'discriminator': 'kind',
+        'strict': False,
+        'from_attributes': True,
     }
 
 
@@ -1959,3 +1953,41 @@ def test_recursive_discriminated_union_with_pydantic_dataclass() -> None:
         if 'Foo' in definition['ref']:
             for field in definition['schema']['fields']:
                 assert field['schema']['type'] == 'tagged-union' if field['name'] == 'x' else True
+
+
+def test_discriminated_union_with_nested_dataclass() -> None:
+    @pydantic_dataclass
+    class Cat:
+        type: Literal['cat'] = 'cat'
+
+    @pydantic_dataclass
+    class Dog:
+        type: Literal['dog'] = 'dog'
+
+    @pydantic_dataclass
+    class NestedDataClass:
+        animal: Annotated[Union[Cat, Dog], Discriminator('type')]
+
+    @pydantic_dataclass
+    class Root:
+        data_class: NestedDataClass
+
+    ta = TypeAdapter(Root)
+    assert ta.core_schema['schema']['fields'][0]['schema']['schema']['fields'][0]['schema']['type'] == 'tagged-union'
+
+
+def test_discriminated_union_with_nested_typed_dicts() -> None:
+    class Cat(TypedDict):
+        type: Literal['cat']
+
+    class Dog(TypedDict):
+        type: Literal['dog']
+
+    class NestedTypedDict(TypedDict):
+        animal: Annotated[Union[Cat, Dog], Discriminator('type')]
+
+    class Root(TypedDict):
+        data_class: NestedTypedDict
+
+    ta = TypeAdapter(Root)
+    assert ta.core_schema['fields']['data_class']['schema']['fields']['animal']['schema']['type'] == 'tagged-union'
