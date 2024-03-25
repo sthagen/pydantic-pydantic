@@ -1649,6 +1649,35 @@ def test_enum_type():
     ]
 
 
+def test_enum_missing_default():
+    class MyEnum(Enum):
+        a = 1
+
+    ta = TypeAdapter(MyEnum)
+    missing_value = re.search(r'missing: (\w+)', repr(ta.validator)).group(1)
+    assert missing_value == 'None'
+
+    assert ta.validate_python(1) is MyEnum.a
+    with pytest.raises(ValidationError):
+        ta.validate_python(2)
+
+
+def test_enum_missing_custom():
+    class MyEnum(Enum):
+        a = 1
+
+        @classmethod
+        def _missing_(cls, value):
+            return MyEnum.a
+
+    ta = TypeAdapter(MyEnum)
+    missing_value = re.search(r'missing: (\w+)', repr(ta.validator)).group(1)
+    assert missing_value == 'Some'
+
+    assert ta.validate_python(1) is MyEnum.a
+    assert ta.validate_python(2) is MyEnum.a
+
+
 def test_int_enum_type():
     class Model(BaseModel):
         my_enum: IntEnum
@@ -3933,6 +3962,59 @@ def test_pattern(pattern_type, pattern_value, matching_value, non_matching_value
         'title': 'Foobar',
         'properties': {'pattern': {'type': 'string', 'format': 'regex', 'title': 'Pattern'}},
         'required': ['pattern'],
+    }
+
+
+@pytest.mark.parametrize(
+    'use_field',
+    [pytest.param(True, id='Field'), pytest.param(False, id='constr')],
+)
+def test_compiled_pattern_in_field(use_field):
+    """
+    https://github.com/pydantic/pydantic/issues/9052
+    https://github.com/pydantic/pydantic/pull/9053
+    """
+    pattern_value = r'^whatev.r\d$'
+    field_pattern = re.compile(pattern_value)
+
+    if use_field:
+
+        class Foobar(BaseModel):
+            str_regex: str = Field(..., pattern=field_pattern)
+    else:
+
+        class Foobar(BaseModel):
+            str_regex: constr(pattern=field_pattern) = ...
+
+    field_general_metadata = Foobar.model_fields['str_regex'].metadata
+    assert len(field_general_metadata) == 1
+    field_metadata_pattern = field_general_metadata[0].pattern
+
+    if use_field:
+        # In Field re.Pattern is converted to str instantly
+        assert field_metadata_pattern == pattern_value
+        assert isinstance(field_metadata_pattern, str)
+
+    else:
+        # In constr re.Pattern is kept as is
+        assert field_metadata_pattern == field_pattern
+        assert isinstance(field_metadata_pattern, re.Pattern)
+
+    matching_value = 'whatever1'
+    f = Foobar(str_regex=matching_value)
+    assert f.str_regex == matching_value
+
+    with pytest.raises(
+        ValidationError,
+        match=re.escape("String should match pattern '" + pattern_value + "'"),
+    ):
+        Foobar(str_regex=' whatever1')
+
+    assert Foobar.model_json_schema() == {
+        'type': 'object',
+        'title': 'Foobar',
+        'properties': {'str_regex': {'pattern': pattern_value, 'title': 'Str Regex', 'type': 'string'}},
+        'required': ['str_regex'],
     }
 
 
