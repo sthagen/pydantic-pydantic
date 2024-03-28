@@ -1,6 +1,7 @@
 import json
 import platform
 import re
+import warnings
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -3151,6 +3152,37 @@ def test_shadow_attribute() -> None:
     assert getattr(Three, 'foo', None) == ' edited! edited!'
 
 
+def test_shadow_attribute_warn_for_redefined_fields() -> None:
+    """https://github.com/pydantic/pydantic/issues/9107"""
+
+    # A simple class which defines a field
+    class Parent:
+        foo: bool = False
+
+    # When inheriting from the parent class, as long as the field is not defined at all, there should be no warning
+    # about shadowed fields.
+    with warnings.catch_warnings(record=True) as captured_warnings:
+        # Start capturing all warnings
+        warnings.simplefilter('always')
+
+        class ChildWithoutRedefinedField(BaseModel, Parent):
+            pass
+
+        # Check that no warnings were captured
+        assert len(captured_warnings) == 0
+
+    # But when inheriting from the parent class and a parent field is redefined, a warning should be raised about
+    # shadowed fields irrespective of whether it is defined with a type that is still compatible or narrower, or
+    # with a different default that is still compatible with the type definition.
+    with pytest.warns(
+        UserWarning,
+        match=r'"foo" in ".*ChildWithRedefinedField" shadows an attribute in parent ".*Parent"',
+    ):
+
+        class ChildWithRedefinedField(BaseModel, Parent):
+            foo: bool = True
+
+
 def test_eval_type_backport():
     class Model(BaseModel):
         foo: 'list[int | str]'
@@ -3203,3 +3235,31 @@ def test_inherited_class_vars(create_module):
 
     assert Child.CONST1 == 'a'
     assert Child.CONST2 == 'b'
+
+
+def test_schema_valid_for_inner_generic() -> None:
+    T = TypeVar('T')
+
+    class Inner(BaseModel, Generic[T]):
+        x: T
+
+    class Outer(BaseModel):
+        inner: Inner[int]
+
+    assert Outer(inner={'x': 1}).inner.x == 1
+    # confirming that the typevars are substituted in the outer model schema
+    assert Outer.__pydantic_core_schema__['schema']['fields']['inner']['schema']['cls'] == Inner[int]
+    assert (
+        Outer.__pydantic_core_schema__['schema']['fields']['inner']['schema']['schema']['fields']['x']['schema']['type']
+        == 'int'
+    )
+
+
+def test_validation_works_for_cyclical_forward_refs() -> None:
+    class X(BaseModel):
+        y: Union['Y', None]
+
+    class Y(BaseModel):
+        x: Union[X, None]
+
+    assert Y(x={'y': None}).x.y is None

@@ -33,7 +33,7 @@ from pydantic.fields import FieldInfo
 from pydantic.types import Strict
 
 from ..config import ConfigDict
-from ..json_schema import JsonSchemaValue, update_json_schema
+from ..json_schema import JsonSchemaValue
 from . import _known_annotated_metadata, _typing_extra, _validators
 from ._core_utils import get_type_ref
 from ._internal_dataclass import slots_true
@@ -87,7 +87,7 @@ def get_enum_core_schema(enum_type: type[Enum], config: ConfigDict) -> CoreSchem
         def get_json_schema(schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
             json_schema = handler(schema)
             original_schema = handler.resolve_ref_schema(json_schema)
-            update_json_schema(original_schema, js_updates)
+            original_schema.update(js_updates)
             return json_schema
 
         # we don't want to add the missing to the schema if it's the default one
@@ -113,7 +113,7 @@ def get_enum_core_schema(enum_type: type[Enum], config: ConfigDict) -> CoreSchem
         def get_json_schema_no_cases(_, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
             json_schema = handler(core_schema.enum_schema(enum_type, cases, sub_type=sub_type, ref=enum_ref))
             original_schema = handler.resolve_ref_schema(json_schema)
-            update_json_schema(original_schema, js_updates)
+            original_schema.update(js_updates)
             return json_schema
 
         # Use an isinstance check for enums with no cases.
@@ -275,6 +275,30 @@ def dequeue_validator(
         return collections.deque(handler(input_value), maxlen=maxlen)
 
 
+def serialize_sequence_via_list(
+    v: Any, handler: core_schema.SerializerFunctionWrapHandler, info: core_schema.SerializationInfo
+) -> Any:
+    items: list[Any] = []
+
+    mapped_origin = SEQUENCE_ORIGIN_MAP.get(type(v), None)
+    if mapped_origin is None:
+        # we shouldn't hit this branch, should probably add a serialization error or something
+        return v
+
+    for index, item in enumerate(v):
+        try:
+            v = handler(item, index)
+        except PydanticOmit:
+            pass
+        else:
+            items.append(v)
+
+    if info.mode_is_json():
+        return items
+    else:
+        return mapped_origin(items)
+
+
 @dataclasses.dataclass(**slots_true)
 class SequenceValidator:
     mapped_origin: type[Any]
@@ -282,23 +306,6 @@ class SequenceValidator:
     min_length: int | None = None
     max_length: int | None = None
     strict: bool | None = None
-
-    def serialize_sequence_via_list(
-        self, v: Any, handler: core_schema.SerializerFunctionWrapHandler, info: core_schema.SerializationInfo
-    ) -> Any:
-        items: list[Any] = []
-        for index, item in enumerate(v):
-            try:
-                v = handler(item, index)
-            except PydanticOmit:
-                pass
-            else:
-                items.append(v)
-
-        if info.mode_is_json():
-            return items
-        else:
-            return self.mapped_origin(items)
 
     def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
         if self.item_source_type is Any:
@@ -344,7 +351,7 @@ class SequenceValidator:
             )
 
             serialization = core_schema.wrap_serializer_function_ser_schema(
-                self.serialize_sequence_via_list, schema=items_schema or core_schema.any_schema(), info_arg=True
+                serialize_sequence_via_list, schema=items_schema or core_schema.any_schema(), info_arg=True
             )
 
             strict = core_schema.chain_schema([check_instance, coerce_instance_wrap(constrained_schema)])

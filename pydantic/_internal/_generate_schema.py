@@ -433,9 +433,9 @@ class GenerateSchema:
     def clean_schema(self, schema: CoreSchema) -> CoreSchema:
         schema = self.collect_definitions(schema)
         schema = simplify_schema_references(schema)
-        schema = _discriminated_union.apply_discriminators(schema)
         if collect_invalid_schemas(schema):
             raise self.CollectedInvalid()
+        schema = _discriminated_union.apply_discriminators(schema)
         schema = validate_core_schema(schema)
         return schema
 
@@ -636,17 +636,8 @@ class GenerateSchema:
             ref_mode = 'to-def'
 
         schema: CoreSchema
-        get_schema = getattr(obj, '__get_pydantic_core_schema__', None)
-        if get_schema is None:
-            validators = getattr(obj, '__get_validators__', None)
-            if validators is None:
-                return None
-            warn(
-                '`__get_validators__` is deprecated and will be removed, use `__get_pydantic_core_schema__` instead.',
-                PydanticDeprecatedSince20,
-            )
-            schema = core_schema.chain_schema([core_schema.with_info_plain_validator_function(v) for v in validators()])
-        else:
+
+        if (get_schema := getattr(obj, '__get_pydantic_core_schema__', None)) is not None:
             if len(inspect.signature(get_schema).parameters) == 1:
                 # (source) -> CoreSchema
                 schema = get_schema(source)
@@ -654,6 +645,21 @@ class GenerateSchema:
                 schema = get_schema(
                     source, CallbackGetCoreSchemaHandler(self._generate_schema_inner, self, ref_mode=ref_mode)
                 )
+        # fmt: off
+        elif (existing_schema := getattr(obj, '__pydantic_core_schema__', None)) is not None and existing_schema.get(
+            'cls', None
+        ) == obj:
+            schema = existing_schema
+        # fmt: on
+        elif (validators := getattr(obj, '__get_validators__', None)) is not None:
+            warn(
+                '`__get_validators__` is deprecated and will be removed, use `__get_pydantic_core_schema__` instead.',
+                PydanticDeprecatedSince20,
+            )
+            schema = core_schema.chain_schema([core_schema.with_info_plain_validator_function(v) for v in validators()])
+        else:
+            # we have no existing schema information on the property, exit early so that we can go generate a schema
+            return None
 
         schema = self._unpack_refs_defs(schema)
 
@@ -1428,6 +1434,8 @@ class GenerateSchema:
 
     def _sequence_schema(self, sequence_type: Any) -> core_schema.CoreSchema:
         """Generate schema for a Sequence, e.g. `Sequence[int]`."""
+        from ._std_types_schema import serialize_sequence_via_list
+
         item_type = self._get_first_arg_or_any(sequence_type)
         item_type_schema = self.generate_schema(item_type)
         list_schema = core_schema.list_schema(item_type_schema)
@@ -1439,7 +1447,13 @@ class GenerateSchema:
             python_schema = core_schema.chain_schema(
                 [python_schema, core_schema.no_info_wrap_validator_function(sequence_validator, list_schema)],
             )
-        return core_schema.json_or_python_schema(json_schema=list_schema, python_schema=python_schema)
+
+        serialization = core_schema.wrap_serializer_function_ser_schema(
+            serialize_sequence_via_list, schema=item_type_schema, info_arg=True
+        )
+        return core_schema.json_or_python_schema(
+            json_schema=list_schema, python_schema=python_schema, serialization=serialization
+        )
 
     def _iterable_schema(self, type_: Any) -> core_schema.GeneratorSchema:
         """Generate a schema for an `Iterable`."""
