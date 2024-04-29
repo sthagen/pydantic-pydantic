@@ -76,6 +76,7 @@ from ._docs_extraction import extract_docstrings_from_cls
 from ._fields import collect_dataclass_fields, get_type_hints_infer_globalns
 from ._forward_ref import PydanticRecursiveRef
 from ._generics import get_standard_typevars_map, has_instance_in_type, recursively_defined_type_refs, replace_types
+from ._mock_val_ser import MockCoreSchema
 from ._schema_generation_shared import CallbackGetCoreSchemaHandler
 from ._typing_extra import is_finalvar, is_self_type
 from ._utils import lenient_issubclass
@@ -649,9 +650,11 @@ class GenerateSchema:
                     source, CallbackGetCoreSchemaHandler(self._generate_schema_inner, self, ref_mode=ref_mode)
                 )
         # fmt: off
-        elif (existing_schema := getattr(obj, '__pydantic_core_schema__', None)) is not None and existing_schema.get(
-            'cls', None
-        ) == obj:
+        elif (
+            (existing_schema := getattr(obj, '__pydantic_core_schema__', None)) is not None
+            and not isinstance(existing_schema, MockCoreSchema)
+            and existing_schema.get('cls', None) == obj
+        ):
             schema = existing_schema
         # fmt: on
         elif (validators := getattr(obj, '__get_validators__', None)) is not None:
@@ -1442,6 +1445,7 @@ class GenerateSchema:
         item_type = self._get_first_arg_or_any(sequence_type)
         item_type_schema = self.generate_schema(item_type)
         list_schema = core_schema.list_schema(item_type_schema)
+        metadata = build_metadata_dict(initial_metadata={'known_metadata_as': typing.Sequence})
 
         python_schema = core_schema.is_instance_schema(typing.Sequence, cls_repr='Sequence')
         if item_type != Any:
@@ -1455,7 +1459,7 @@ class GenerateSchema:
             serialize_sequence_via_list, schema=item_type_schema, info_arg=True
         )
         return core_schema.json_or_python_schema(
-            json_schema=list_schema, python_schema=python_schema, serialization=serialization
+            json_schema=list_schema, python_schema=python_schema, serialization=serialization, metadata=metadata
         )
 
     def _iterable_schema(self, type_: Any) -> core_schema.GeneratorSchema:
