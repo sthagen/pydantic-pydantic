@@ -1278,6 +1278,8 @@ class BoolCastable:
         ('bool_check', BoolCastable(), ValidationError),
         ('str_check', 's', 's'),
         ('str_check', '  s  ', 's'),
+        ('str_check', ' leading', 'leading'),
+        ('str_check', 'trailing ', 'trailing'),
         ('str_check', b's', 's'),
         ('str_check', b'  s  ', 's'),
         ('str_check', bytearray(b's' * 5), 'sssss'),
@@ -6417,6 +6419,15 @@ def test_string_constraints() -> None:
         Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True), AfterValidator(lambda x: x * 2)]
     )
     assert ta.validate_python(' ABC ') == 'abcabc'
+
+
+def test_string_constraints_strict() -> None:
+    ta = TypeAdapter(Annotated[str, StringConstraints(strict=False)])
+    assert ta.validate_python(b'123') == '123'
+
+    ta = TypeAdapter(Annotated[str, StringConstraints(strict=True)])
+    with pytest.raises(ValidationError):
+        ta.validate_python(b'123')
 
 
 def test_decimal_float_precision() -> None:
