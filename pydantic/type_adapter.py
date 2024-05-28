@@ -147,7 +147,7 @@ def _frame_depth(
 
 @final
 class TypeAdapter(Generic[T]):
-    """Usage docs: https://docs.pydantic.dev/2.7/concepts/type_adapter/
+    """Usage docs: https://docs.pydantic.dev/2.8/concepts/type_adapter/
 
     Type adapters provide a flexible way to perform validation and serialization based on a Python type.
 
@@ -375,7 +375,7 @@ class TypeAdapter(Generic[T]):
     def validate_json(
         self, data: str | bytes, /, *, strict: bool | None = None, context: dict[str, Any] | None = None
     ) -> T:
-        """Usage docs: https://docs.pydantic.dev/2.7/concepts/json/#json-parsing
+        """Usage docs: https://docs.pydantic.dev/2.8/concepts/json/#json-parsing
 
         Validate a JSON string or bytes against the model.
 
@@ -432,6 +432,7 @@ class TypeAdapter(Generic[T]):
         round_trip: bool = False,
         warnings: bool | Literal['none', 'warn', 'error'] = True,
         serialize_as_any: bool = False,
+        context: dict[str, Any] | None = None,
     ) -> Any:
         """Dump an instance of the adapted type to a Python object.
 
@@ -448,6 +449,7 @@ class TypeAdapter(Generic[T]):
             warnings: How to handle serialization errors. False/"none" ignores them, True/"warn" logs errors,
                 "error" raises a [`PydanticSerializationError`][pydantic_core.PydanticSerializationError].
             serialize_as_any: Whether to serialize fields with duck-typing serialization behavior.
+            context: Additional context to pass to the serializer.
 
         Returns:
             The serialized object.
@@ -464,6 +466,7 @@ class TypeAdapter(Generic[T]):
             round_trip=round_trip,
             warnings=warnings,
             serialize_as_any=serialize_as_any,
+            context=context,
         )
 
     @_frame_depth(1)
@@ -482,8 +485,9 @@ class TypeAdapter(Generic[T]):
         round_trip: bool = False,
         warnings: bool | Literal['none', 'warn', 'error'] = True,
         serialize_as_any: bool = False,
+        context: dict[str, Any] | None = None,
     ) -> bytes:
-        """Usage docs: https://docs.pydantic.dev/2.7/concepts/json/#json-serialization
+        """Usage docs: https://docs.pydantic.dev/2.8/concepts/json/#json-serialization
 
         Serialize an instance of the adapted type to JSON.
 
@@ -500,6 +504,7 @@ class TypeAdapter(Generic[T]):
             warnings: How to handle serialization errors. False/"none" ignores them, True/"warn" logs errors,
                 "error" raises a [`PydanticSerializationError`][pydantic_core.PydanticSerializationError].
             serialize_as_any: Whether to serialize fields with duck-typing serialization behavior.
+            context: Additional context to pass to the serializer.
 
         Returns:
             The JSON representation of the given instance as bytes.
@@ -516,6 +521,7 @@ class TypeAdapter(Generic[T]):
             round_trip=round_trip,
             warnings=warnings,
             serialize_as_any=serialize_as_any,
+            context=context,
         )
 
     @_frame_depth(1)
