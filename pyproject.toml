@@ -172,7 +172,7 @@ addopts = [
 
 # configuring https://github.com/pydantic/hooky
 [tool.hooky]
-assignees = ['sydney-runkle']
+reviewers = ['sydney-runkle']
 require_change_file = false
 unconfirmed_label = 'pending'
 
@@ -246,3 +246,10 @@ skip = '.git,env*,pydantic/v1/*'
 # `ser` - abbreviation for "ser"ialisation
 # `crate` - a rust crate
 ignore-words-list = 'gir,ser,crate'
+
+[tool.codeflash]
+module-root = "pydantic"
+tests-root = "tests"
+test-framework = "pytest"
+ignore-paths = []
+formatter-cmd = ["ruff check --exit-zero --fix $file", "ruff format $file"]
