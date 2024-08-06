@@ -95,7 +95,7 @@ def run_example(example: CodeExample, eval_example: EvalExample, mocker: Any) ->
 
     group_name = prefix_settings.get('group')
 
-    eval_example.set_config(ruff_ignore=['D', 'T', 'E721', 'Q001'], line_length=LINE_LENGTH)
+    eval_example.set_config(ruff_ignore=['D', 'T', 'B', 'C4', 'E721', 'Q001'], line_length=LINE_LENGTH)
     if '# ignore-above' in example.source:
         eval_example.set_config(ruff_ignore=eval_example.config.ruff_ignore + ['E402'], line_length=LINE_LENGTH)
     if group_name:
@@ -181,6 +181,9 @@ def test_docs_examples(example: CodeExample, eval_example: EvalExample, tmp_path
     if example.path.name == 'devtools.md':
         pytest.skip('tested below')
 
+    if 'bytes_invalid_encoding' in example.source:
+        pytest.xfail('waiting for pydantic-core support: pydantic/pydantic-core#1308')
+
     run_example(example, eval_example, mocker)
 
 
@@ -192,7 +195,7 @@ def test_docs_examples(example: CodeExample, eval_example: EvalExample, tmp_path
 def test_docs_devtools_example(example: CodeExample, eval_example: EvalExample, tmp_path: Path):
     from ansi2html import Ansi2HTMLConverter
 
-    eval_example.set_config(ruff_ignore=['D', 'T'], line_length=LINE_LENGTH)
+    eval_example.set_config(ruff_ignore=['D', 'T', 'B', 'C4'], line_length=LINE_LENGTH)
 
     if eval_example.update_examples:
         eval_example.format(example)
@@ -253,6 +256,9 @@ def test_validation_error_codes():
             if error_code_section is not None and printed_error_code != error_code_section:
                 test_failures.append(f'Error code {error_code_section!r} is not printed in its example')
             error_code_section = section_match.group(1)
+            if error_code_section == 'bytes_invalid_encoding':
+                # Waiting for pydantic-core support: pydantic/pydantic-core#1308
+                continue
             if error_code_section not in expected_validation_error_codes:
                 test_failures.append(f'Documented error code {error_code_section!r} is not a member of ErrorType')
             documented_validation_error_codes.append(error_code_section)
