@@ -18,7 +18,7 @@ from ._config import ConfigWrapper
 from ._docs_extraction import extract_docstrings_from_cls
 from ._import_utils import import_cached_base_model, import_cached_field_info
 from ._repr import Representation
-from ._typing_extra import get_cls_type_hints_lenient, get_type_hints, is_classvar, is_finalvar
+from ._typing_extra import get_cls_type_hints_lenient, is_classvar, is_finalvar
 
 if TYPE_CHECKING:
     from annotated_types import BaseMetadata
@@ -27,35 +27,6 @@ if TYPE_CHECKING:
     from ..main import BaseModel
     from ._dataclasses import StandardDataclass
     from ._decorators import DecoratorInfos
-
-
-def get_type_hints_infer_globalns(
-    obj: Any,
-    localns: dict[str, Any] | None = None,
-    include_extras: bool = False,
-) -> dict[str, Any]:
-    """Gets type hints for an object by inferring the global namespace.
-
-    It uses the `typing.get_type_hints`, The only thing that we do here is fetching
-    global namespace from `obj.__module__` if it is not `None`.
-
-    Args:
-        obj: The object to get its type hints.
-        localns: The local namespaces.
-        include_extras: Whether to recursively include annotation metadata.
-
-    Returns:
-        The object type hints.
-    """
-    module_name = getattr(obj, '__module__', None)
-    globalns: dict[str, Any] | None = None
-    if module_name:
-        try:
-            globalns = sys.modules[module_name].__dict__
-        except KeyError:
-            # happens occasionally, see https://github.com/pydantic/pydantic/issues/2363
-            pass
-    return get_type_hints(obj, globalns=globalns, localns=localns, include_extras=include_extras)
 
 
 class PydanticMetadata(Representation):
@@ -254,11 +225,12 @@ def collect_model_fields(  # noqa: C901
     return fields, class_vars
 
 
-def _warn_on_nested_alias_in_annotation(ann_type: type[Any], ann_name: str):
+def _warn_on_nested_alias_in_annotation(ann_type: type[Any], ann_name: str) -> None:
     FieldInfo = import_cached_field_info()
 
-    if hasattr(ann_type, '__args__'):
-        for anno_arg in ann_type.__args__:
+    args = getattr(ann_type, '__args__', None)
+    if args:
+        for anno_arg in args:
             if _typing_extra.is_annotated(anno_arg):
                 for anno_type_arg in _typing_extra.get_args(anno_arg):
                     if isinstance(anno_type_arg, FieldInfo) and anno_type_arg.alias is not None:
@@ -266,7 +238,7 @@ def _warn_on_nested_alias_in_annotation(ann_type: type[Any], ann_name: str):
                             f'`alias` specification on field "{ann_name}" must be set on outermost annotation to take effect.',
                             UserWarning,
                         )
-                        break
+                        return
 
 
 def _is_finalvar_with_default_val(type_: type[Any], val: Any) -> bool:
