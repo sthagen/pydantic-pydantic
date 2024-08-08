@@ -267,11 +267,6 @@ def modify_model_json_schema(
 
     json_schema = handler(schema_or_field)
     original_schema = handler.resolve_ref_schema(json_schema)
-    # Preserve the fact that definitions schemas should never have sibling keys:
-    if '$ref' in original_schema:
-        ref = original_schema['$ref']
-        original_schema.clear()
-        original_schema['allOf'] = [{'$ref': ref}]
     if title is not None:
         original_schema['title'] = title
     elif 'title' not in original_schema:
@@ -811,21 +806,15 @@ class GenerateSchema:
         schema: CoreSchema
 
         if (get_schema := getattr(obj, '__get_pydantic_core_schema__', None)) is not None:
-            if len(inspect.signature(get_schema).parameters) == 1:
-                # (source) -> CoreSchema
-                schema = get_schema(source)
-            else:
-                schema = get_schema(
-                    source, CallbackGetCoreSchemaHandler(self._generate_schema_inner, self, ref_mode=ref_mode)
-                )
-        # fmt: off
+            schema = get_schema(
+                source, CallbackGetCoreSchemaHandler(self._generate_schema_inner, self, ref_mode=ref_mode)
+            )
         elif (
             (existing_schema := getattr(obj, '__pydantic_core_schema__', None)) is not None
             and not isinstance(existing_schema, MockCoreSchema)
             and existing_schema.get('cls', None) == obj
         ):
             schema = existing_schema
-        # fmt: on
         elif (validators := getattr(obj, '__get_validators__', None)) is not None:
             warn(
                 '`__get_validators__` is deprecated and will be removed, use `__get_pydantic_core_schema__` instead.',
@@ -1845,6 +1834,9 @@ class GenerateSchema:
                     slots=has_slots,
                     config=core_config,
                     metadata=metadata,
+                    # we don't use a custom __setattr__ for dataclasses, so we must
+                    # pass along the frozen config setting to the pydantic-core schema
+                    frozen=self._config_wrapper_stack.tail.frozen,
                 )
                 schema = self._apply_model_serializers(dc_schema, decorators.model_serializers.values())
                 schema = apply_model_validators(schema, model_validators, 'outer')
