@@ -209,7 +209,7 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
         # `__tracebackhide__` tells pytest and some other tools to omit this function from tracebacks
         __tracebackhide__ = True
         validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
-        if self != validated_self:
+        if self is not validated_self:
             warnings.warn(
                 'A custom validator is returning a value other than `self`.\n'
                 "Returning anything other than `self` from a top level model validator isn't supported when validating via `__init__`.\n"
@@ -254,7 +254,9 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
             an error if extra values are passed, but they will be ignored.
 
         Args:
-            _fields_set: The set of field names accepted for the Model instance.
+            _fields_set: A set of field names that were originally explicitly set during instantiation. If provided,
+                this is directly used for the [`model_fields_set`][pydantic.BaseModel.model_fields_set] attribute.
+                Otherwise, the field names from the `values` argument will be used.
             values: Trusted or pre-validated data dictionary.
 
         Returns:
