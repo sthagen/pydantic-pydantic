@@ -813,9 +813,12 @@ class GenerateSchema:
                 source, CallbackGetCoreSchemaHandler(self._generate_schema_inner, self, ref_mode=ref_mode)
             )
         elif (
-            (existing_schema := getattr(obj, '__pydantic_core_schema__', None)) is not None
+            hasattr(obj, '__dict__')
+            # In some cases (e.g. a stdlib dataclass subclassing a Pydantic dataclass),
+            # doing an attribute access to get the schema will result in the parent schema
+            # being fetched. Thus, only look for the current obj's dict:
+            and (existing_schema := obj.__dict__.get('__pydantic_core_schema__')) is not None
             and not isinstance(existing_schema, MockCoreSchema)
-            and existing_schema.get('cls', None) is obj
         ):
             schema = existing_schema
         elif (validators := getattr(obj, '__get_validators__', None)) is not None:
@@ -1265,7 +1268,7 @@ class GenerateSchema:
         # Update FieldInfo annotation if appropriate:
         FieldInfo = import_cached_field_info()
 
-        if has_instance_in_type(field_info.annotation, ForwardRef):
+        if has_instance_in_type(field_info.annotation, (ForwardRef, str)):
             types_namespace = self._types_namespace
             if self._typevars_map:
                 types_namespace = (types_namespace or {}).copy()
