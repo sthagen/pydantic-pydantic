@@ -1185,19 +1185,19 @@ print(BarModel.model_fields.keys())
 #> dict_keys(['foo', 'bar', 'apple', 'banana'])
 ```
 
-You can also add validators by passing a dict to the `__validators__` argument.
+You can also add validators by passing a dictionary to the `__validators__` argument.
 
 ```py rewrite_assert="false"
 from pydantic import ValidationError, create_model, field_validator
 
 
-def username_alphanumeric(cls, v):
+def alphanum(cls, v):
     assert v.isalnum(), 'must be alphanumeric'
     return v
 
 
 validators = {
-    'username_validator': field_validator('username')(username_alphanumeric)
+    'username_validator': field_validator('username')(alphanum)  # (1)!
 }
 
 UserModel = create_model(
@@ -1219,11 +1219,16 @@ except ValidationError as e:
     """
 ```
 
+1. Make sure that the validators names do not clash with any of the field names as
+   internally, Pydantic gathers all members into a namespace and mimics the normal
+   creation of a class using the [`types` module utilities](https://docs.python.org/3/library/types.html#dynamic-type-creation).
+
+
 !!! note
     To pickle a dynamically created model:
 
     - the model must be defined globally
-    - it must provide `__module__`
+    - the `__module__` argument must be provided
 
 ## `RootModel` and custom root types
 
@@ -1730,7 +1735,8 @@ m = Model(x=1, y='a')
 assert m.model_dump() == {'x': 1}
 ```
 
-If you want this to raise an error, you can achieve this via `model_config`:
+If you want this to raise an error, you can set the [`extra`][pydantic.ConfigDict.extra] configuration
+value to `'forbid'`:
 
 ```py
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -1753,7 +1759,7 @@ except ValidationError as exc:
     """
 ```
 
-To instead preserve any extra data provided, you can set `extra='allow'`.
+To instead preserve any extra data provided, you can set [`extra`][pydantic.ConfigDict.extra] to `'allow'`.
 The extra fields will then be stored in `BaseModel.__pydantic_extra__`:
 
 ```py
@@ -1805,7 +1811,7 @@ assert m.__pydantic_extra__ == {'y': 2}
 ```
 
 1. The `= Field(init=False)` does not have any effect at runtime, but prevents the `__pydantic_extra__` field from
-being treated as an argument to the model's `__init__` method by type-checkers.
+   being included as a parameter to the model's `__init__` method by type checkers.
 
 The same configurations apply to `TypedDict` and `dataclass`' except the config is controlled by setting the
 `__pydantic_config__` attribute of the class to a valid `ConfigDict`.
