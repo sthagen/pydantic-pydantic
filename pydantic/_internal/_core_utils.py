@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from typing import Any, Callable, Hashable, TypeVar, Union
+from collections.abc import Hashable
+from typing import Any, Callable, TypeVar, Union
 
 from pydantic_core import CoreSchema, core_schema
 from pydantic_core import validate_core_schema as _validate_core_schema
@@ -61,7 +62,7 @@ def is_list_like_schema_with_items_schema(
     return schema['type'] in _LIST_LIKE_SCHEMA_WITH_ITEMS_TYPES
 
 
-def get_type_ref(type_: type[Any], args_override: tuple[type[Any], ...] | None = None) -> str:
+def get_type_ref(type_: Any, args_override: tuple[type[Any], ...] | None = None) -> str:
     """Produces the ref to be used for this type by pydantic_core's core schemas.
 
     This `args_override` argument was added for the purpose of creating valid recursive references

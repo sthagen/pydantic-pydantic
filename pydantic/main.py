@@ -1,5 +1,9 @@
 """Logic for creating models."""
 
+# Because `dict` is in the local namespace of the `BaseModel` class, we use `Dict` for annotations.
+# TODO v3 fallback to `dict` when the deprecated `dict` method gets removed.
+# ruff: noqa: UP035
+
 from __future__ import annotations as _annotations
 
 import operator
@@ -7,6 +11,7 @@ import sys
 import types
 import typing
 import warnings
+from collections.abc import Generator, Mapping
 from copy import copy, deepcopy
 from functools import cached_property
 from typing import (
@@ -15,11 +20,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
-    Generator,
     Literal,
-    Mapping,
-    Set,
-    Tuple,
     TypeVar,
     Union,
     cast,
@@ -31,6 +32,7 @@ import typing_extensions
 from pydantic_core import PydanticUndefined
 from typing_extensions import Self, TypeAlias, Unpack
 
+from . import PydanticDeprecatedSince20, PydanticDeprecatedSince211
 from ._internal import (
     _config,
     _decorators,
@@ -51,7 +53,6 @@ from .config import ConfigDict
 from .errors import PydanticUndefinedAnnotation, PydanticUserError
 from .json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaMode, JsonSchemaValue, model_json_schema
 from .plugin._schema_validator import PluggableSchemaValidator
-from .warnings import PydanticDeprecatedSince20
 
 if TYPE_CHECKING:
     from inspect import Signature
@@ -71,11 +72,11 @@ else:
 __all__ = 'BaseModel', 'create_model'
 
 # Keep these type aliases available at runtime:
-TupleGenerator: TypeAlias = Generator[Tuple[str, Any], None, None]
+TupleGenerator: TypeAlias = Generator[tuple[str, Any], None, None]
 # NOTE: In reality, `bool` should be replaced by `Literal[True]` but mypy fails to correctly apply bidirectional
 # type inference (e.g. when using `{'a': {'b': True}}`):
 # NOTE: Keep this type alias in sync with the stub definition in `pydantic-core`:
-IncEx: TypeAlias = Union[Set[int], Set[str], Mapping[int, Union['IncEx', bool]], Mapping[str, Union['IncEx', bool]]]
+IncEx: TypeAlias = Union[set[int], set[str], Mapping[int, Union['IncEx', bool]], Mapping[str, Union['IncEx', bool]]]
 
 _object_setattr = _model_construction.object_setattr
 
@@ -134,8 +135,6 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
     Configuration for the model, should be a dictionary conforming to [`ConfigDict`][pydantic.config.ConfigDict].
     """
 
-    # Because `dict` is in the local namespace of the `BaseModel` class, we use `Dict` for annotations.
-    # TODO v3 fallback to `dict` when the deprecated `dict` method gets removed.
     __class_vars__: ClassVar[set[str]]
     """The names of the class variables defined on the model."""
 
@@ -687,23 +686,20 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: type[BaseModel], handler: GetCoreSchemaHandler, /) -> CoreSchema:
-        """Hook into generating the model's CoreSchema.
-
-        Args:
-            source: The class we are generating a schema for.
-                This will generally be the same as the `cls` argument if this is a classmethod.
-            handler: A callable that calls into Pydantic's internal CoreSchema generation logic.
-
-        Returns:
-            A `pydantic-core` `CoreSchema`.
-        """
-        # Only use the cached value from this _exact_ class; we don't want one from a parent class
-        # This is why we check `cls.__dict__` and don't use `cls.__pydantic_core_schema__` or similar.
+        # This warning is only emitted when calling `super().__get_pydantic_core_schema__` from a model subclass.
+        # In the generate schema logic, this method (`BaseModel.__get_pydantic_core_schema__`) is special cased to
+        # *not* be called if not overridden.
+        warnings.warn(
+            'The `__get_pydantic_core_schema__` method of the `BaseModel` class is deprecated. If you are calling '
+            '`super().__get_pydantic_core_schema__` when overriding the method on a Pydantic model, consider using '
+            '`handler(source)` instead. However, note that overriding this method on models can lead to unexpected '
+            'side effects.',
+            PydanticDeprecatedSince211,
+            stacklevel=2,
+        )
+        # Logic copied over from `GenerateSchema._model_schema`:
         schema = cls.__dict__.get('__pydantic_core_schema__')
         if schema is not None and not isinstance(schema, _mock_val_ser.MockCoreSchema):
-            # Due to the way generic classes are built, it's possible that an invalid schema may be temporarily
-            # set on generic classes. I think we could resolve this to ensure that we get proper schema caching
-            # for generics, but for simplicity for now, we just always rebuild if the class has a generic origin.
             if not cls.__pydantic_generic_metadata__['origin']:
                 return cls.__pydantic_core_schema__
 
