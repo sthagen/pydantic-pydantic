@@ -4,9 +4,10 @@ import sys
 import types
 import typing
 from collections import ChainMap
-from collections.abc import Iterator, Mapping, MutableMapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from itertools import zip_longest
 from types import prepare_class
 from typing import TYPE_CHECKING, Any, TypeVar
 from weakref import WeakValueDictionary
@@ -35,30 +36,20 @@ GenericTypesCacheKey = tuple[Any, Any, tuple[Any, ...]]
 KT = TypeVar('KT')
 VT = TypeVar('VT')
 _LIMITED_DICT_SIZE = 100
-if TYPE_CHECKING:
 
-    class LimitedDict(dict, MutableMapping[KT, VT]):
-        def __init__(self, size_limit: int = _LIMITED_DICT_SIZE): ...
 
-else:
+class LimitedDict(dict[KT, VT]):
+    def __init__(self, size_limit: int = _LIMITED_DICT_SIZE) -> None:
+        self.size_limit = size_limit
+        super().__init__()
 
-    class LimitedDict(dict):
-        """Limit the size/length of a dict used for caching to avoid unlimited increase in memory usage.
-
-        Since the dict is ordered, and we always remove elements from the beginning, this is effectively a FIFO cache.
-        """
-
-        def __init__(self, size_limit: int = _LIMITED_DICT_SIZE):
-            self.size_limit = size_limit
-            super().__init__()
-
-        def __setitem__(self, key: Any, value: Any, /) -> None:
-            super().__setitem__(key, value)
-            if len(self) > self.size_limit:
-                excess = len(self) - self.size_limit + self.size_limit // 10
-                to_remove = list(self.keys())[:excess]
-                for k in to_remove:
-                    del self[k]
+    def __setitem__(self, key: KT, value: VT, /) -> None:
+        super().__setitem__(key, value)
+        if len(self) > self.size_limit:
+            excess = len(self) - self.size_limit + self.size_limit // 10
+            to_remove = list(self.keys())[:excess]
+            for k in to_remove:
+                del self[k]
 
 
 # weak dictionaries allow the dynamically created parametrized versions of generic models to get collected
@@ -382,21 +373,55 @@ def has_instance_in_type(type_: Any, isinstance_target: Any) -> bool:
     return False
 
 
-def check_parameters_count(cls: type[BaseModel], parameters: tuple[Any, ...]) -> None:
-    """Check the generic model parameters count is equal.
-
-    Args:
-        cls: The generic model.
-        parameters: A tuple of passed parameters to the generic model.
+def map_generic_model_arguments(cls: type[BaseModel], args: tuple[Any, ...]) -> dict[TypeVar, Any]:
+    """Return a mapping between the arguments of a generic model and the provided arguments during parametrization.
 
     Raises:
-        TypeError: If the passed parameters count is not equal to generic model parameters count.
+        TypeError: If the number of arguments does not match the parameters (i.e. if providing too few or too many arguments).
+
+    Example:
+        ```python {test="skip" lint="skip"}
+        class Model[T, U, V = int](BaseModel): ...
+
+        map_generic_model_arguments(Model, (str, bytes))
+        #> {T: str, U: bytes, V: int}
+
+        map_generic_model_arguments(Model, (str,))
+        #> TypeError: Too few arguments for <class '__main__.Model'>; actual 1, expected at least 2
+
+        map_generic_model_argumenst(Model, (str, bytes, int, complex))
+        #> TypeError: Too many arguments for <class '__main__.Model'>; actual 4, expected 3
+        ```
+
+    Note:
+        This function is analogous to the private `typing._check_generic_specialization` function.
     """
-    actual = len(parameters)
-    expected = len(cls.__pydantic_generic_metadata__['parameters'])
-    if actual != expected:
-        description = 'many' if actual > expected else 'few'
-        raise TypeError(f'Too {description} parameters for {cls}; actual {actual}, expected {expected}')
+    parameters = cls.__pydantic_generic_metadata__['parameters']
+    expected_len = len(parameters)
+    typevars_map: dict[TypeVar, Any] = {}
+
+    _missing = object()
+    for parameter, argument in zip_longest(parameters, args, fillvalue=_missing):
+        if parameter is _missing:
+            raise TypeError(f'Too many arguments for {cls}; actual {len(args)}, expected {expected_len}')
+
+        if argument is _missing:
+            param = typing.cast(TypeVar, parameter)
+            try:
+                has_default = param.has_default()
+            except AttributeError:
+                # Happens if using `typing.TypeVar` (and not `typing_extensions`) on Python < 3.13.
+                has_default = False
+            if has_default:
+                typevars_map[param] = param.__default__
+            else:
+                expected_len -= sum(hasattr(p, 'has_default') and p.has_default() for p in parameters)
+                raise TypeError(f'Too few arguments for {cls}; actual {len(args)}, expected at least {expected_len}')
+        else:
+            param = typing.cast(TypeVar, parameter)
+            typevars_map[param] = argument
+
+    return typevars_map
 
 
 _generic_recursion_cache: ContextVar[set[str] | None] = ContextVar('_generic_recursion_cache', default=None)

@@ -530,6 +530,10 @@ def test_mariadb_dsns(dsn):
     [
         'clickhouse+native://user:pass@localhost:9000/app',
         'clickhouse+asynch://user:pass@localhost:9000/app',
+        'clickhouse+http://user:pass@localhost:9000/app',
+        'clickhouse://user:pass@localhost:9000/app',
+        'clickhouses://user:pass@localhost:9000/app',
+        'clickhousedb://user:pass@localhost:9000/app',
     ],
 )
 def test_clickhouse_dsns(dsn):
@@ -1187,3 +1191,15 @@ def test_unexpected_ser() -> None:
         match="Expected `<class 'pydantic.networks.HttpUrl'>` but got `<class 'str'>` with value `'http://example.com'`",
     ):
         ta.dump_python('http://example.com', warnings='error')
+
+
+def test_url_ser() -> None:
+    ta = TypeAdapter(HttpUrl)
+    assert ta.dump_python(HttpUrl('http://example.com')) == HttpUrl('http://example.com')
+    assert ta.dump_json(HttpUrl('http://example.com')) == b'"http://example.com/"'
+
+
+def test_url_ser_as_any() -> None:
+    ta = TypeAdapter(Any)
+    assert ta.dump_python(HttpUrl('http://example.com')) == HttpUrl('http://example.com')
+    assert ta.dump_json(HttpUrl('http://example.com')) == b'"http://example.com/"'

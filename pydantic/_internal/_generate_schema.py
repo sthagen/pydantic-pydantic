@@ -1063,8 +1063,10 @@ class GenerateSchema:
         elif _typing_extra.is_zoneinfo_type(obj):
             return self._zoneinfo_schema()
 
+        # dataclasses.is_dataclass coerces dc instances to types, but we only handle
+        # the case of a dc type here
         if dataclasses.is_dataclass(obj):
-            return self._dataclass_schema(obj, None)
+            return self._dataclass_schema(obj, None)  # pyright: ignore[reportArgumentType]
 
         origin = get_origin(obj)
         if origin is not None:
@@ -1989,7 +1991,7 @@ class GenerateSchema:
         try:
             has_default = typevar.has_default()
         except AttributeError:
-            # Happens if using `typing.TypeVar` on Python < 3.13
+            # Happens if using `typing.TypeVar` (and not `typing_extensions`) on Python < 3.13
             pass
         else:
             if has_default:
