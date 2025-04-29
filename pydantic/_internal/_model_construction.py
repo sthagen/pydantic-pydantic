@@ -406,7 +406,7 @@ def inspect_namespace(  # noqa C901
             isinstance(value, type)
             and value.__module__ == namespace['__module__']
             and '__qualname__' in namespace
-            and value.__qualname__.startswith(namespace['__qualname__'])
+            and value.__qualname__.startswith(f'{namespace["__qualname__"]}.')
         ):
             # `value` is a nested type defined in this namespace; don't error
             continue
@@ -562,6 +562,7 @@ def complete_model_class(
     ns_resolver: NsResolver,
     *,
     raise_errors: bool = True,
+    call_on_complete_hook: bool = True,
     create_model_module: str | None = None,
 ) -> bool:
     """Finish building a model class.
@@ -574,6 +575,7 @@ def complete_model_class(
         config_wrapper: The config wrapper instance.
         ns_resolver: The namespace resolver instance to use during schema building.
         raise_errors: Whether to raise errors.
+        call_on_complete_hook: Whether to call the `__pydantic_on_complete__` hook.
         create_model_module: The module of the class to be created, if created by `create_model`.
 
     Returns:
@@ -666,6 +668,9 @@ def complete_model_class(
     )
 
     cls.__pydantic_complete__ = True
+
+    if call_on_complete_hook:
+        cls.__pydantic_on_complete__()
 
     return True
 
