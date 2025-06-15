@@ -2203,6 +2203,34 @@ def test_deferred_discriminated_union_meta_key_removed() -> None:
     assert Base.__pydantic_core_schema__ == base_schema
 
 
+def test_tagged_discriminator_type_alias() -> None:
+    """https://github.com/pydantic/pydantic/issues/11930"""
+
+    class Pie(BaseModel):
+        pass
+
+    class ApplePie(Pie):
+        fruit: Literal['apple'] = 'apple'
+
+    class PumpkinPie(Pie):
+        filling: Literal['pumpkin'] = 'pumpkin'
+
+    def get_discriminator_value(v):
+        return v.get('fruit', v.get('filling'))
+
+    TaggedApplePie = TypeAliasType('TaggedApplePie', Annotated[ApplePie, Tag('apple')])
+
+    class ThanksgivingDinner(BaseModel):
+        dessert: Annotated[
+            Union[TaggedApplePie, Annotated[PumpkinPie, Tag('pumpkin')]],
+            Discriminator(get_discriminator_value),
+        ]
+
+    inst = ThanksgivingDinner(dessert={'fruit': 'apple'})
+
+    assert isinstance(inst.dessert, ApplePie)
+
+
 def test_discriminated_union_type_alias_type() -> None:
     """https://github.com/pydantic/pydantic/issues/11661
 
@@ -2254,3 +2282,47 @@ def test_deferred_discriminated_union_and_references() -> None:
     final_schema = gen_schema.clean_schema(disc_union_ref)
 
     assert final_schema['type'] == 'tagged-union'
+
+
+def test_recursive_discriminated_union() -> None:
+    """https://github.com/pydantic/pydantic/issues/11978"""
+
+    F = TypeVar('F', bound=BaseModel)
+
+    class Not(BaseModel, Generic[F]):
+        operand: F = Field()
+
+    class Label(BaseModel):
+        prop: Literal['label'] = 'label'
+
+    def filter_discriminator(v):
+        if isinstance(v, dict):
+            if 'not' in v:
+                return 'not'
+            else:
+                return v.get('prop')
+
+        if isinstance(v, Not):
+            return 'not'
+        else:
+            return getattr(v, 'prop', None)
+
+    ParagraphFilterExpression = Annotated[
+        Union[
+            Annotated[Not['ParagraphFilterExpression'], Tag('not')],
+            Annotated[Label, Tag('label')],
+        ],
+        Discriminator(filter_discriminator),
+    ]
+
+    FieldFilterExpression = Annotated[
+        Union[
+            Annotated[Not['FieldFilterExpression'], Tag('not')],
+            Annotated[Label, Tag('label')],
+        ],
+        Discriminator(filter_discriminator),
+    ]
+
+    class FilterExpression(BaseModel):
+        field: FieldFilterExpression
+        paragraph: ParagraphFilterExpression
