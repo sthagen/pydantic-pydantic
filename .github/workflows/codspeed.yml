@@ -22,7 +22,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
 
       # Using this action is still necessary for CodSpeed to work:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -75,6 +75,7 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: "false"
 
       - name: Run CodSpeed benchmarks
-        uses: CodSpeedHQ/action@v3
+        uses: CodSpeedHQ/action@v4
         with:
+          mode: instrumentation
           run: uv run --no-sync pytest ./tests/benchmarks --codspeed
