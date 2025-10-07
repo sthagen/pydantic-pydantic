@@ -48,7 +48,7 @@ dependencies = [
     'typing-extensions>=4.14.1',
     'annotated-types>=0.6.0',
     # Keep this in sync with the version in the `check_pydantic_core_version()` function:
-    'pydantic-core==2.40.1',
+    'pydantic-core==2.41.1',
     'typing-inspection>=0.4.2',
 ]
 dynamic = ['version', 'readme']
@@ -288,7 +288,7 @@ enableExperimentalFeatures = true
 skip = '.git,env*,pydantic/v1/*,uv.lock'
 # `ser` - abbreviation for "ser"ialisation
 # `crate` - a rust crate
-ignore-words-list = 'gir,ser,crate'
+ignore-words-list = 'gir,ser,crate,deques'
 
 [tool.codeflash]
 module-root = "pydantic"

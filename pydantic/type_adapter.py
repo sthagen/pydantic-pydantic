@@ -403,7 +403,7 @@ class TypeAdapter(Generic[T]):
         strict: bool | None = None,
         extra: ExtraValues | None = None,
         from_attributes: bool | None = None,
-        context: dict[str, Any] | None = None,
+        context: Any | None = None,
         experimental_allow_partial: bool | Literal['off', 'on', 'trailing-strings'] = False,
         by_alias: bool | None = None,
         by_name: bool | None = None,
@@ -456,7 +456,7 @@ class TypeAdapter(Generic[T]):
         *,
         strict: bool | None = None,
         extra: ExtraValues | None = None,
-        context: dict[str, Any] | None = None,
+        context: Any | None = None,
         experimental_allow_partial: bool | Literal['off', 'on', 'trailing-strings'] = False,
         by_alias: bool | None = None,
         by_name: bool | None = None,
@@ -506,7 +506,7 @@ class TypeAdapter(Generic[T]):
         *,
         strict: bool | None = None,
         extra: ExtraValues | None = None,
-        context: dict[str, Any] | None = None,
+        context: Any | None = None,
         experimental_allow_partial: bool | Literal['off', 'on', 'trailing-strings'] = False,
         by_alias: bool | None = None,
         by_name: bool | None = None,
@@ -546,7 +546,7 @@ class TypeAdapter(Generic[T]):
             by_name=by_name,
         )
 
-    def get_default_value(self, *, strict: bool | None = None, context: dict[str, Any] | None = None) -> Some[T] | None:
+    def get_default_value(self, *, strict: bool | None = None, context: Any | None = None) -> Some[T] | None:
         """Get the default value for the wrapped type.
 
         Args:
@@ -570,11 +570,12 @@ class TypeAdapter(Generic[T]):
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
+        exclude_computed_fields: bool = False,
         round_trip: bool = False,
         warnings: bool | Literal['none', 'warn', 'error'] = True,
         fallback: Callable[[Any], Any] | None = None,
         serialize_as_any: bool = False,
-        context: dict[str, Any] | None = None,
+        context: Any | None = None,
     ) -> Any:
         """Dump an instance of the adapted type to a Python object.
 
@@ -587,6 +588,9 @@ class TypeAdapter(Generic[T]):
             exclude_unset: Whether to exclude unset fields.
             exclude_defaults: Whether to exclude fields with default values.
             exclude_none: Whether to exclude fields with None values.
+            exclude_computed_fields: Whether to exclude computed fields.
+                While this can be useful for round-tripping, it is usually recommended to use the dedicated
+                `round_trip` parameter instead.
             round_trip: Whether to output the serialized data in a way that is compatible with deserialization.
             warnings: How to handle serialization errors. False/"none" ignores them, True/"warn" logs errors,
                 "error" raises a [`PydanticSerializationError`][pydantic_core.PydanticSerializationError].
@@ -607,6 +611,7 @@ class TypeAdapter(Generic[T]):
             exclude_unset=exclude_unset,
             exclude_defaults=exclude_defaults,
             exclude_none=exclude_none,
+            exclude_computed_fields=exclude_computed_fields,
             round_trip=round_trip,
             warnings=warnings,
             fallback=fallback,
@@ -627,11 +632,12 @@ class TypeAdapter(Generic[T]):
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
+        exclude_computed_fields: bool = False,
         round_trip: bool = False,
         warnings: bool | Literal['none', 'warn', 'error'] = True,
         fallback: Callable[[Any], Any] | None = None,
         serialize_as_any: bool = False,
-        context: dict[str, Any] | None = None,
+        context: Any | None = None,
     ) -> bytes:
         """!!! abstract "Usage Documentation"
             [JSON Serialization](../concepts/json.md#json-serialization)
@@ -649,6 +655,9 @@ class TypeAdapter(Generic[T]):
             exclude_unset: Whether to exclude unset fields.
             exclude_defaults: Whether to exclude fields with default values.
             exclude_none: Whether to exclude fields with a value of `None`.
+            exclude_computed_fields: Whether to exclude computed fields.
+                While this can be useful for round-tripping, it is usually recommended to use the dedicated
+                `round_trip` parameter instead.
             round_trip: Whether to serialize and deserialize the instance to ensure round-tripping.
             warnings: How to handle serialization errors. False/"none" ignores them, True/"warn" logs errors,
                 "error" raises a [`PydanticSerializationError`][pydantic_core.PydanticSerializationError].
@@ -670,6 +679,7 @@ class TypeAdapter(Generic[T]):
             exclude_unset=exclude_unset,
             exclude_defaults=exclude_defaults,
             exclude_none=exclude_none,
+            exclude_computed_fields=exclude_computed_fields,
             round_trip=round_trip,
             warnings=warnings,
             fallback=fallback,
@@ -682,6 +692,7 @@ class TypeAdapter(Generic[T]):
         *,
         by_alias: bool = True,
         ref_template: str = DEFAULT_REF_TEMPLATE,
+        union_format: Literal['any_of', 'primitive_type_array'] = 'any_of',
         schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
         mode: JsonSchemaMode = 'validation',
     ) -> dict[str, Any]:
@@ -690,13 +701,26 @@ class TypeAdapter(Generic[T]):
         Args:
             by_alias: Whether to use alias names for field names.
             ref_template: The format string used for generating $ref strings.
+            union_format: The format to use when combining schemas from unions together. Can be one of:
+
+                - `'any_of'`: Use the [`anyOf`](https://json-schema.org/understanding-json-schema/reference/combining#anyOf)
+                keyword to combine schemas (the default).
+                - `'primitive_type_array'`: Use the [`type`](https://json-schema.org/understanding-json-schema/reference/type)
+                keyword as an array of strings, containing each type of the combination. If any of the schemas is not a primitive
+                type (`string`, `boolean`, `null`, `integer` or `number`) or contains constraints/metadata, falls back to
+                `any_of`.
+            schema_generator: To override the logic used to generate the JSON schema, as a subclass of
+                `GenerateJsonSchema` with your desired modifications
+            mode: The mode in which to generate the schema.
             schema_generator: The generator class used for creating the schema.
             mode: The mode to use for schema generation.
 
         Returns:
             The JSON schema for the model as a dictionary.
         """
-        schema_generator_instance = schema_generator(by_alias=by_alias, ref_template=ref_template)
+        schema_generator_instance = schema_generator(
+            by_alias=by_alias, ref_template=ref_template, union_format=union_format
+        )
         if isinstance(self.core_schema, _mock_val_ser.MockCoreSchema):
             self.core_schema.rebuild()
             assert not isinstance(self.core_schema, _mock_val_ser.MockCoreSchema), 'this is a bug! please report it'
@@ -711,6 +735,7 @@ class TypeAdapter(Generic[T]):
         title: str | None = None,
         description: str | None = None,
         ref_template: str = DEFAULT_REF_TEMPLATE,
+        union_format: Literal['any_of', 'primitive_type_array'] = 'any_of',
         schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
     ) -> tuple[dict[tuple[JsonSchemaKeyT, JsonSchemaMode], JsonSchemaValue], JsonSchemaValue]:
         """Generate a JSON schema including definitions from multiple type adapters.
@@ -723,6 +748,14 @@ class TypeAdapter(Generic[T]):
             title: The title for the schema.
             description: The description for the schema.
             ref_template: The format string used for generating $ref strings.
+            union_format: The format to use when combining schemas from unions together. Can be one of:
+
+                - `'any_of'`: Use the [`anyOf`](https://json-schema.org/understanding-json-schema/reference/combining#anyOf)
+                keyword to combine schemas (the default).
+                - `'primitive_type_array'`: Use the [`type`](https://json-schema.org/understanding-json-schema/reference/type)
+                keyword as an array of strings, containing each type of the combination. If any of the schemas is not a primitive
+                type (`string`, `boolean`, `null`, `integer` or `number`) or contains constraints/metadata, falls back to
+                `any_of`.
             schema_generator: The generator class used for creating the schema.
 
         Returns:
@@ -735,7 +768,9 @@ class TypeAdapter(Generic[T]):
                     element, along with the optional title and description keys.
 
         """
-        schema_generator_instance = schema_generator(by_alias=by_alias, ref_template=ref_template)
+        schema_generator_instance = schema_generator(
+            by_alias=by_alias, ref_template=ref_template, union_format=union_format
+        )
 
         inputs_ = []
         for key, mode, adapter in inputs:
