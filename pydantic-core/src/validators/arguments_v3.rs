@@ -17,6 +17,7 @@ use crate::input::{
     Arguments, BorrowInput, Input, KeywordArgs, PositionalArgs, ValidatedDict, ValidatedTuple, ValidationMatch,
 };
 use crate::lookup_key::LookupKeyCollection;
+use crate::lookup_key::LookupType;
 use crate::tools::SchemaDict;
 
 use super::validation_state::ValidationState;
@@ -43,7 +44,7 @@ impl FromStr for ParameterMode {
             "keyword_only" => Ok(Self::KeywordOnly),
             "var_kwargs_uniform" => Ok(Self::VarKwargsUniform),
             "var_kwargs_unpacked_typed_dict" => Ok(Self::VarKwargsUnpackedTypedDict),
-            s => py_schema_err!("Invalid var_kwargs mode: `{}`", s),
+            s => py_schema_err!("Invalid var_kwargs mode: `{s}`"),
         }
     }
 }
@@ -102,7 +103,7 @@ impl BuildValidator for ArgumentsV3Validator {
             let py_name: Bound<PyString> = arg.get_as_req(intern!(py, "name"))?;
             let name = py_name.to_string();
             if !names.insert(name.clone()) {
-                return py_schema_err!("Duplicate parameter '{}'", name);
+                return py_schema_err!("Duplicate parameter '{name}'");
             }
 
             let py_mode = arg.get_as::<Bound<'_, PyString>>(intern!(py, "mode"))?;
@@ -118,28 +119,25 @@ impl BuildValidator for ArgumentsV3Validator {
                 ParameterMode::PositionalOnly => {
                     if had_positional_or_keyword || had_var_args || had_keyword_only || had_var_kwargs {
                         return py_schema_err!(
-                            "Positional only parameter '{}' cannot follow other parameter kinds",
-                            name
+                            "Positional only parameter '{name}' cannot follow other parameter kinds"
                         );
                     }
                 }
                 ParameterMode::PositionalOrKeyword => {
                     if had_var_args || had_keyword_only || had_var_kwargs {
                         return py_schema_err!(
-                            "Positional or keyword parameter '{}' cannot follow variadic or keyword only parameters",
-                            name
+                            "Positional or keyword parameter '{name}' cannot follow variadic or keyword only parameters"
                         );
                     }
                     had_positional_or_keyword = true;
                 }
                 ParameterMode::VarArgs => {
                     if had_var_args {
-                        return py_schema_err!("Duplicate variadic positional parameter '{}'", name);
+                        return py_schema_err!("Duplicate variadic positional parameter '{name}'");
                     }
                     if had_keyword_only || had_var_kwargs {
                         return py_schema_err!(
-                            "Variadic positional parameter '{}' cannot follow variadic or keyword only parameters",
-                            name
+                            "Variadic positional parameter '{name}' cannot follow variadic or keyword only parameters"
                         );
                     }
                     had_var_args = true;
@@ -147,15 +145,14 @@ impl BuildValidator for ArgumentsV3Validator {
                 ParameterMode::KeywordOnly => {
                     if had_var_kwargs {
                         return py_schema_err!(
-                            "Keyword only parameter '{}' cannot follow variadic keyword only parameter",
-                            name
+                            "Keyword only parameter '{name}' cannot follow variadic keyword only parameter"
                         );
                     }
                     had_keyword_only = true;
                 }
                 ParameterMode::VarKwargsUniform | ParameterMode::VarKwargsUnpackedTypedDict => {
                     if had_var_kwargs {
-                        return py_schema_err!("Duplicate variadic keyword parameter '{}'", name);
+                        return py_schema_err!("Duplicate variadic keyword parameter '{name}'");
                     }
                     had_var_kwargs = true;
                 }
@@ -165,13 +162,13 @@ impl BuildValidator for ArgumentsV3Validator {
 
             let validator = match build_validator(&schema, config, definitions) {
                 Ok(v) => v,
-                Err(err) => return py_schema_err!("Parameter '{}':\n  {}", name, err),
+                Err(err) => return py_schema_err!("Parameter '{name}':\n  {err}"),
             };
 
             let has_default = match validator.as_ref() {
                 CombinedValidator::WithDefault(v) => {
                     if v.omit_on_error() {
-                        return py_schema_err!("Parameter '{}': omit_on_error cannot be used with arguments", name);
+                        return py_schema_err!("Parameter '{name}': omit_on_error cannot be used with arguments");
                     }
                     v.has_default()
                 }
@@ -179,7 +176,7 @@ impl BuildValidator for ArgumentsV3Validator {
             };
 
             if had_default_arg && !has_default && !had_keyword_only {
-                return py_schema_err!("Required parameter '{}' follows parameter with default", name);
+                return py_schema_err!("Required parameter '{name}' follows parameter with default");
             } else if has_default {
                 had_default_arg = true;
             }
@@ -242,6 +239,7 @@ impl ArgumentsV3Validator {
 
         let validate_by_alias = state.validate_by_alias_or(self.validate_by_alias);
         let validate_by_name = state.validate_by_name_or(self.validate_by_name);
+        let lookup_type = LookupType::from_bools(validate_by_alias, validate_by_name)?;
         let extra_behavior = state.extra_behavior_or(self.extra);
 
         // Keep track of used keys for extra behavior:
@@ -253,12 +251,13 @@ impl ArgumentsV3Validator {
             };
 
         for parameter in &self.parameters {
-            let lookup_key = parameter
-                .lookup_key_collection
-                .select(validate_by_alias, validate_by_name)?;
-
             // A value is present in the mapping:
-            if let Some((lookup_path, dict_value)) = mapping.get_item(lookup_key)? {
+            if let Some((lookup_path, dict_value)) = parameter
+                .lookup_key_collection
+                .lookup_keys(lookup_type)
+                .find_map(|lookup_key| mapping.get_item(lookup_key).transpose())
+                .transpose()?
+            {
                 if let Some(ref mut used_keys) = used_keys {
                     // key is "used" whether or not validation passes, since we want to skip this key in
                     // extra logic either way
@@ -409,6 +408,7 @@ impl ArgumentsV3Validator {
                                 _ => unreachable!(),
                             };
 
+                            let lookup_key = parameter.lookup_key_collection.first_key_matching(lookup_type);
                             errors.push(lookup_key.error(
                                 error_type,
                                 original_input,
@@ -527,14 +527,11 @@ impl ArgumentsV3Validator {
 
         let validate_by_alias = state.validate_by_alias_or(self.validate_by_alias);
         let validate_by_name = state.validate_by_name_or(self.validate_by_name);
+        let lookup_type = LookupType::from_bools(validate_by_alias, validate_by_name)?;
         let extra_behavior = state.extra_behavior_or(self.extra);
 
         // go through non variadic parameters, getting the value from args or kwargs and validating it
         for (index, parameter) in self.parameters.iter().filter(|p| !p.is_variadic()).enumerate() {
-            let lookup_key = parameter
-                .lookup_key_collection
-                .select(validate_by_alias, validate_by_name)?;
-
             let mut pos_value = None;
             if let Some(args) = args_kwargs.args()
                 && matches!(
@@ -551,7 +548,11 @@ impl ArgumentsV3Validator {
                     parameter.mode,
                     ParameterMode::PositionalOrKeyword | ParameterMode::KeywordOnly
                 )
-                && let Some((lookup_path, value)) = kwargs.get_item(lookup_key)?
+                && let Some((lookup_path, value)) = parameter
+                    .lookup_key_collection
+                    .lookup_keys(lookup_type)
+                    .find_map(|lookup_key| kwargs.get_item(lookup_key).transpose())
+                    .transpose()?
             {
                 used_kwargs.insert(lookup_path.first_key());
                 kw_value = Some((lookup_path, value));
@@ -598,32 +599,23 @@ impl ArgumentsV3Validator {
                             output_kwargs.set_item(PyString::new(py, parameter.name.as_str()).unbind(), value)?;
                         }
                     } else {
-                        // Required and no default, error:
-                        match parameter.mode {
-                            ParameterMode::PositionalOnly => {
-                                errors.push(ValLineError::new_with_loc(
-                                    ErrorTypeDefaults::MissingPositionalOnlyArgument,
-                                    original_input,
-                                    index,
-                                ));
-                            }
-                            ParameterMode::PositionalOrKeyword => {
-                                errors.push(lookup_key.error(
-                                    ErrorTypeDefaults::MissingArgument,
-                                    original_input,
-                                    self.loc_by_alias,
-                                    &parameter.name,
-                                ));
-                            }
-                            ParameterMode::KeywordOnly => {
-                                errors.push(lookup_key.error(
-                                    ErrorTypeDefaults::MissingKeywordOnlyArgument,
-                                    original_input,
-                                    self.loc_by_alias,
-                                    &parameter.name,
-                                ));
-                            }
+                        let error_type = match parameter.mode {
+                            ParameterMode::PositionalOnly => ErrorTypeDefaults::MissingPositionalOnlyArgument,
+                            ParameterMode::PositionalOrKeyword => ErrorTypeDefaults::MissingArgument,
+                            ParameterMode::KeywordOnly => ErrorTypeDefaults::MissingKeywordOnlyArgument,
                             _ => unreachable!(),
+                        };
+
+                        if parameter.mode == ParameterMode::PositionalOnly {
+                            errors.push(ValLineError::new_with_loc(error_type, original_input, index));
+                        } else {
+                            let lookup_key = parameter.lookup_key_collection.first_key_matching(lookup_type);
+                            errors.push(lookup_key.error(
+                                error_type,
+                                original_input,
+                                self.loc_by_alias,
+                                &parameter.name,
+                            ));
                         }
                     }
                 }
