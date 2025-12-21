@@ -8,9 +8,9 @@ use pyo3::types::{PyDict, PyList, PyString};
 use speedate::MicrosecondsPrecisionOverflowBehavior;
 use strum::EnumMessage;
 
-use crate::errors::{ErrorType, ErrorTypeDefaults, InputValue, LocItem, ValError, ValResult};
+use crate::errors::{ErrorType, ErrorTypeDefaults, InputValue, ValError, ValResult};
 use crate::input::return_enums::EitherComplex;
-use crate::lookup_key::{LookupKey, LookupPath};
+use crate::lookup_key::LookupPath;
 use crate::validators::complex::string_to_complex;
 use crate::validators::decimal::create_decimal;
 use crate::validators::{TemporalUnitMode, ValBytesMode};
@@ -26,23 +26,6 @@ use super::{
     Arguments, BorrowInput, EitherBytes, EitherFloat, EitherInt, EitherString, EitherTimedelta, GenericIterator, Input,
     KeywordArgs, PositionalArgs, ValidatedDict, ValidatedList, ValidatedSet, ValidatedTuple,
 };
-
-/// This is required but since JSON object keys are always strings, I don't think it can be called
-impl From<&JsonValue<'_>> for LocItem {
-    fn from(json_value: &JsonValue) -> Self {
-        match json_value {
-            JsonValue::Int(i) => (*i).into(),
-            JsonValue::Str(s) => s.clone().into(),
-            v => format!("{v:?}").into(),
-        }
-    }
-}
-
-impl From<JsonValue<'_>> for LocItem {
-    fn from(json_value: JsonValue) -> Self {
-        (&json_value).into()
-    }
-}
 
 impl<'py, 'data> Input<'py> for JsonValue<'data> {
     #[inline]
@@ -584,7 +567,7 @@ impl<'data> ValidatedDict<'_> for &'_ JsonObject<'data> {
     where
         Self: 'a;
 
-    fn get_item<'k>(&self, key: &'k LookupKey) -> ValResult<Option<(&'k LookupPath, Self::Item<'_>)>> {
+    fn get_item(&self, key: &LookupPath) -> ValResult<Option<Self::Item<'_>>> {
         key.json_get(self)
     }
 
@@ -694,7 +677,7 @@ impl<'data> KeywordArgs<'_> for JsonObject<'data> {
     fn len(&self) -> usize {
         Vec::len(self)
     }
-    fn get_item<'k>(&self, key: &'k LookupKey) -> ValResult<Option<(&'k LookupPath, Self::Item<'_>)>> {
+    fn get_item<'k>(&self, key: &LookupPath) -> ValResult<Option<Self::Item<'_>>> {
         key.json_get(self)
     }
     fn iter(&self) -> impl Iterator<Item = ValResult<(Self::Key<'_>, Self::Item<'_>)>> {

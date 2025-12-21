@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString, PyType};
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyDict, PyType};
 
 use crate::build_tools::py_schema_err;
 use crate::build_tools::{ExtraBehavior, is_strict, schema_or_config};
@@ -12,9 +13,10 @@ use crate::input::BorrowInput;
 use crate::input::ConsumeIterator;
 use crate::input::ValidationMatch;
 use crate::input::{Input, ValidatedDict};
-use crate::lookup_key::LookupKeyCollection;
+use crate::lookup_key::LookupPathCollection;
 use crate::lookup_key::LookupType;
 use crate::tools::SchemaDict;
+use crate::tools::pybackedstr_to_pystring;
 use ahash::AHashSet;
 use jiter::PartialMode;
 
@@ -22,9 +24,8 @@ use super::{BuildValidator, CombinedValidator, DefinitionsBuilder, ValidationSta
 
 #[derive(Debug)]
 struct TypedDictField {
-    name: String,
-    lookup_key_collection: LookupKeyCollection,
-    name_py: Py<PyString>,
+    name: PyBackedStr,
+    lookup_path_collection: LookupPathCollection,
     required: bool,
     validator: Arc<CombinedValidator>,
 }
@@ -83,14 +84,13 @@ impl BuildValidator for TypedDictValidator {
 
         for (key, value) in fields_dict {
             let field_info = value.cast::<PyDict>()?;
-            let field_name_py = key.cast_into::<PyString>()?;
-            let field_name = field_name_py.to_str()?;
+            let name: PyBackedStr = key.extract()?;
 
             let schema = field_info.get_as_req(intern!(py, "schema"))?;
 
             let validator = match build_validator(&schema, config, definitions) {
                 Ok(v) => v,
-                Err(err) => return py_schema_err!("Field \"{field_name}\":\n  {err}"),
+                Err(err) => return py_schema_err!("Field \"{name}\":\n  {err}"),
             };
 
             let required = match field_info.get_as::<bool>(intern!(py, "required"))? {
@@ -99,7 +99,7 @@ impl BuildValidator for TypedDictValidator {
                         && let CombinedValidator::WithDefault(val) = validator.as_ref()
                         && val.has_default()
                     {
-                        return py_schema_err!("Field '{field_name}': a required field cannot have a default value");
+                        return py_schema_err!("Field '{name}': a required field cannot have a default value");
                     }
                     required
                 }
@@ -110,18 +110,17 @@ impl BuildValidator for TypedDictValidator {
                 && let CombinedValidator::WithDefault(val) = validator.as_ref()
                 && val.omit_on_error()
             {
-                return py_schema_err!("Field '{field_name}': 'on_error = omit' cannot be set for required fields");
+                return py_schema_err!("Field '{name}': 'on_error = omit' cannot be set for required fields");
             }
 
-            let validation_alias = field_info.get_item(intern!(py, "validation_alias"))?;
-            let lookup_key_collection = LookupKeyCollection::new(validation_alias, &field_name_py)?;
+            let validation_alias = field_info.get_as(intern!(py, "validation_alias"))?;
+            let lookup_path_collection = LookupPathCollection::new(validation_alias, name.clone())?;
 
             fields.push(TypedDictField {
-                name: field_name.to_string(),
-                lookup_key_collection,
-                name_py: field_name_py.into(),
-                validator,
+                name,
+                lookup_path_collection,
                 required,
+                validator,
             });
         }
         Ok(CombinedValidator::TypedDict(Self {
@@ -184,25 +183,25 @@ impl Validator for TypedDictValidator {
             let mut fields_set_count: usize = 0;
 
             for field in &self.fields {
-                let op_key_value = match field
-                    .lookup_key_collection
-                    .lookup_keys(lookup_type)
-                    .find_map(|lookup_key| dict.get_item(lookup_key).transpose())
-                    .transpose()
+                if let Some((lookup_path, lookup_result)) = field
+                    .lookup_path_collection
+                    .lookup_paths(lookup_type)
+                    .find_map(|path| Some((path, dict.get_item(path).transpose()?)))
                 {
-                    Ok(v) => v,
-                    Err(ValError::LineErrors(line_errors)) => {
-                        let field_loc: LocItem = field.name.clone().into();
-                        if partial_last_key.as_ref() == Some(&field_loc) {
-                            for err in line_errors {
-                                errors.push(err.with_outer_location(field_loc.clone()));
+                    let value = match lookup_result {
+                        Ok(v) => v,
+                        Err(ValError::LineErrors(line_errors)) => {
+                            let field_loc: LocItem = field.name.clone().into();
+                            if partial_last_key.as_ref() == Some(&field_loc) {
+                                for err in line_errors {
+                                    errors.push(err.with_outer_location(field_loc.clone()));
+                                }
                             }
+                            continue;
                         }
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                };
-                if let Some((lookup_path, value)) = op_key_value {
+                        Err(err) => return Err(err),
+                    };
+
                     if let Some(ref mut used_keys) = used_keys {
                         // key is "used" whether or not validation passes, since we want to skip this key in
                         // extra logic either way
@@ -218,12 +217,14 @@ impl Validator for TypedDictValidator {
                         true => allow_partial,
                         false => false.into(),
                     };
-                    let state =
-                        &mut state.rebind_extra(|extra| extra.field_name = Some(field.name_py.bind(py).clone()));
+
+                    // FIXME: for model and dataclass, `default_value` is called with field name set in extra, does that matter?
+                    let state = &mut state
+                        .rebind_extra(|extra| extra.field_name = Some(pybackedstr_to_pystring(py, &field.name)));
 
                     match field.validator.validate(py, value.borrow_input(), state) {
                         Ok(value) => {
-                            output_dict.set_item(&field.name_py, value)?;
+                            output_dict.set_item(&field.name, value)?;
                             fields_set_count += 1;
                         }
                         Err(e) => {
@@ -248,21 +249,17 @@ impl Validator for TypedDictValidator {
                     continue;
                 }
 
-                match field.validator.default_value(py, Some(field.name.as_str()), state) {
+                match field.validator.default_value(py, Some(field.name.clone()), state) {
                     Ok(Some(value)) => {
                         // Default value exists, and passed validation if required
-                        output_dict.set_item(&field.name_py, value)?;
+                        output_dict.set_item(&field.name, value)?;
                     }
                     Ok(None) => {
                         // This means there was no default value
                         if field.required {
-                            let lookup_key = field.lookup_key_collection.first_key_matching(lookup_type);
-                            errors.push(lookup_key.error(
-                                ErrorTypeDefaults::Missing,
-                                input,
-                                self.loc_by_alias,
-                                &field.name,
-                            ));
+                            let error_type = ErrorTypeDefaults::Missing;
+                            let error_loc = field.lookup_path_collection.error_loc(lookup_type, self.loc_by_alias);
+                            errors.push(ValLineError::new_with_full_loc(error_type, input, error_loc));
                         }
                     }
                     Err(ValError::Omit) => {}
