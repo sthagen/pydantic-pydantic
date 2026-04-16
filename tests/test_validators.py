@@ -1,6 +1,7 @@
 import contextlib
 import re
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
@@ -10,11 +11,8 @@ from os.path import normcase
 from typing import (
     Annotated,
     Any,
-    Callable,
     Literal,
     NamedTuple,
-    Optional,
-    Union,
 )
 from unittest.mock import MagicMock
 
@@ -182,7 +180,7 @@ def test_annotated_validator_typing_cache(validator, func):
     FancyInt = Annotated[int, validator(func)]
 
     class FancyIntModel(BaseModel):
-        x: Optional[FancyInt]
+        x: FancyInt | None
 
     assert FancyIntModel(x=1234).x == 1234
     assert FancyIntModel(x=-1).x == 0
@@ -712,7 +710,7 @@ def test_validate_not_always():
     check_calls = 0
 
     class Model(BaseModel):
-        a: Optional[str] = None
+        a: str | None = None
 
         @field_validator('a', mode='before')
         @classmethod
@@ -1142,7 +1140,7 @@ def test_validation_each_item_nullable():
     with pytest.warns(PydanticDeprecatedSince20, match=V1_VALIDATOR_DEPRECATION_MATCH):
 
         class Model(BaseModel):
-            foobar: Optional[list[int]]
+            foobar: list[int] | None
 
             @validator('foobar', each_item=True)
             @classmethod
@@ -1184,7 +1182,7 @@ def test_validator_always_optional():
     check_calls = 0
 
     class Model(BaseModel):
-        a: Optional[str] = None
+        a: str | None = None
 
         with pytest.warns(PydanticDeprecatedSince20, match=V1_VALIDATOR_DEPRECATION_MATCH):
 
@@ -1205,7 +1203,7 @@ def test_field_validator_validate_default_optional():
     check_calls = 0
 
     class Model(BaseModel):
-        a: Optional[str] = Field(None, validate_default=True)
+        a: str | None = Field(None, validate_default=True)
 
         @field_validator('a', mode='before')
         @classmethod
@@ -1291,7 +1289,7 @@ def test_field_validator_validate_default_post():
 
 def test_validator_always_post_optional():
     class Model(BaseModel):
-        a: Optional[str] = None
+        a: str | None = None
 
         with pytest.warns(PydanticDeprecatedSince20, match=V1_VALIDATOR_DEPRECATION_MATCH):
 
@@ -1306,7 +1304,7 @@ def test_validator_always_post_optional():
 
 def test_field_validator_validate_default_post_optional():
     class Model(BaseModel):
-        a: Optional[str] = Field(None, validate_default=True)
+        a: str | None = Field(None, validate_default=True)
 
         @field_validator('a', mode='before')
         @classmethod
@@ -1752,7 +1750,7 @@ def test_nested_literal_validator():
 
 def test_union_literal_with_constraints():
     class Model(BaseModel, validate_assignment=True):
-        x: Union[Literal[42], Literal['pika']] = Field(frozen=True)
+        x: Literal[42] | Literal['pika'] = Field(frozen=True)
 
     m = Model(x=42)
     with pytest.raises(ValidationError) as exc_info:
@@ -1960,7 +1958,7 @@ def test_model_validator_many_values_change():
     class Rectangle(BaseModel):
         width: float
         height: float
-        area: Optional[float] = None
+        area: float | None = None
 
         model_config = ConfigDict(validate_assignment=True)
 
@@ -2855,8 +2853,8 @@ def test_wrap_validator_field_name():
 def test_validate_default_raises_for_basemodel() -> None:
     class Model(BaseModel):
         value_0: str
-        value_a: Annotated[Optional[str], Field(None, validate_default=True)]
-        value_b: Annotated[Optional[str], Field(None, validate_default=True)]
+        value_a: Annotated[str | None, Field(None, validate_default=True)]
+        value_b: Annotated[str | None, Field(None, validate_default=True)]
 
         @field_validator('value_a', mode='after')
         def value_a_validator(cls, value):
@@ -2892,8 +2890,8 @@ def test_validate_default_raises_for_dataclasses() -> None:
     @pydantic_dataclass
     class Model:
         value_0: str
-        value_a: Annotated[Optional[str], Field(None, validate_default=True)]
-        value_b: Annotated[Optional[str], Field(None, validate_default=True)]
+        value_a: Annotated[str | None, Field(None, validate_default=True)]
+        value_b: Annotated[str | None, Field(None, validate_default=True)]
 
         @field_validator('value_a', mode='after')
         def value_a_validator(cls, value):
@@ -3018,7 +3016,7 @@ def test_field_validator_input_type_invalid_mode() -> None:
         class Model(BaseModel):
             a: int
 
-            @field_validator('a', mode='after', json_schema_input_type=Union[int, str])  # pyright: ignore
+            @field_validator('a', mode='after', json_schema_input_type=int | str)  # pyright: ignore
             @classmethod
             def validate_a(cls, value: Any) -> Any: ...
 
@@ -3145,3 +3143,45 @@ def test_nested_model_validator_not_reexecuted():
     )  # Create a Sub instance without triggering validation (e.g., using model_construct)
     # Attempt to create Base with the Sub instance. This line should succeed if the bug is fixed, but currently raises ValidationError.
     Base(sub=sub)  # <-- This throws AssertionError because Sub's 'after' validator runs again.
+
+
+def test_model_validate_by_json_field_validator_with_validation_info() -> None:
+    """https://github.com/pydantic/pydantic/issues/13074"""
+
+    class Foo(BaseModel):
+        field1: int
+        field2: int
+
+        @field_validator('field2')
+        @classmethod
+        def _validate_field2(cls, v: int, info: ValidationInfo) -> int:
+            assert info.field_name in ('field1', 'field2')
+            assert info.context == 'context'
+
+            return v + info.data['field1']
+
+    f1 = Foo.model_validate({'field1': 1, 'field2': 2}, context='context')
+    f2 = Foo.model_validate_json('{"field1": 1, "field2": 2}', context='context')
+
+    assert f1.field1 == f2.field1 == 1
+    assert f1.field2 == f2.field2 == 3
+
+
+def test_model_validate_json_default_value_validator_with_validation_info() -> None:
+    """https://github.com/pydantic/pydantic/issues/13074"""
+
+    class Foo(BaseModel, validate_default=True):
+        field: int = 1
+
+        @field_validator('field')
+        @classmethod
+        def _validate_field(cls, v: int, info: ValidationInfo) -> int:
+            assert info.field_name == 'field'
+            assert info.context == 'context'
+
+            return v + 1
+
+    f1 = Foo.model_validate({'field': 1}, context='context')
+    f2 = Foo.model_validate_json('{"field1": 1}', context='context')
+
+    assert f1.field == f2.field == 2
