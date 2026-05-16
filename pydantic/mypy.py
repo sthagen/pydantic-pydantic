@@ -15,6 +15,7 @@ from mypy.nodes import (
     ARG_OPT,
     ARG_POS,
     ARG_STAR2,
+    GDEF,
     INVARIANT,
     MDEF,
     Argument,
@@ -190,8 +191,19 @@ class PydanticPlugin(Plugin):
             if arg_name == '__base__' and isinstance(arg_expr, RefExpr) and arg_expr.node is not None:
                 if isinstance(arg_expr.node, TypeInfo):
                     base_fullname = arg_expr.node.fullname
-                elif isinstance(arg_expr.node, Var) and isinstance(arg_expr.node.type, Instance):
-                    base_fullname = arg_expr.node.type.type.fullname
+                elif isinstance(arg_expr.node, Var):
+                    arg_type = get_proper_type(arg_expr.node.type)
+                    if isinstance(arg_type, Instance):
+                        base_fullname = arg_type.type.fullname
+                    elif isinstance(arg_type, TypeType):
+                        item_type = get_proper_type(arg_type.item)
+                        if isinstance(item_type, TypeVarType):
+                            # Inside classmethods, `cls` is modeled as `type[Self]`. Creating a concrete
+                            # synthetic type here loses that type variable, so let mypy use infer the correct type
+                            # from the `create_model()` overload with the type var instead.
+                            return
+                        if isinstance(item_type, Instance):
+                            base_fullname = item_type.type.fullname
 
         base_sym = ctx.api.lookup_fully_qualified_or_none(base_fullname)
         if base_sym is None or not isinstance(base_sym.node, TypeInfo):
@@ -208,6 +220,12 @@ class PydanticPlugin(Plugin):
         info.metaclass_type = base_info.metaclass_type
 
         ctx.api.add_symbol_table_node(ctx.name, SymbolTableNode(MDEF, info))
+
+        # Mypy has a quirk for serialization of classes nested in functions. This is
+        # a workaround that should work in most cases, until mypy has a better plugin API.
+        if '@' in info.fullname:
+            _, name = info.fullname.rsplit('.', maxsplit=1)
+            ctx.api.modules[ctx.api.cur_mod_id].names[name] = SymbolTableNode(GDEF, info)
 
 
 class PydanticPluginConfig:
