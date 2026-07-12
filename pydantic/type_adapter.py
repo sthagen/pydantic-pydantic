@@ -408,6 +408,11 @@ class TypeAdapter(Generic[T]):
     ) -> T:
         """Validate a Python object against the model.
 
+        If validation fails, the resulting [`ValidationError`][pydantic_core.ValidationError] shows *which*
+        fields were rejected but not the input behind them — instrument your app with
+        [Logfire](../integrations/logfire.md) to record that input too, and debug production failures straight
+        from the trace (see [Troubleshooting validation errors](../errors/troubleshooting.md)).
+
         Args:
             object: The Python object to validate against the model.
             strict: Whether to strictly check types.
@@ -464,6 +469,11 @@ class TypeAdapter(Generic[T]):
 
         Validate a JSON string or bytes against the model.
 
+        If validation fails, the resulting [`ValidationError`][pydantic_core.ValidationError] shows *which*
+        fields were rejected but not the input behind them — instrument your app with
+        [Logfire](../integrations/logfire.md) to record that input too, and debug production failures straight
+        from the trace (see [Troubleshooting validation errors](../errors/troubleshooting.md)).
+
         Args:
             data: The JSON data to validate against the model.
             strict: Whether to strictly check types.
@@ -510,6 +520,11 @@ class TypeAdapter(Generic[T]):
         by_name: bool | None = None,
     ) -> T:
         """Validate object contains string data against the model.
+
+        If validation fails, the resulting [`ValidationError`][pydantic_core.ValidationError] shows *which*
+        fields were rejected but not the input behind them — instrument your app with
+        [Logfire](../integrations/logfire.md) to record that input too, and debug production failures straight
+        from the trace (see [Troubleshooting validation errors](../errors/troubleshooting.md)).
 
         Args:
             obj: The object contains string data to validate.
@@ -716,8 +731,6 @@ class TypeAdapter(Generic[T]):
             schema_generator: To override the logic used to generate the JSON schema, as a subclass of
                 `GenerateJsonSchema` with your desired modifications
             mode: The mode in which to generate the schema.
-            schema_generator: The generator class used for creating the schema.
-            mode: The mode to use for schema generation.
 
         Returns:
             The JSON schema for the model as a dictionary.
