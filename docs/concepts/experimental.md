@@ -148,6 +148,11 @@ Partial validation is particularly helpful when processing the output of an LLM,
 !!! warning
     Partial validation is an experimental feature and may change in future versions of Pydantic. The current implementation should be considered a proof of concept at this time and has a number of [limitations](#limitations-of-partial-validation).
 
+!!! tip "Logfire integration"
+    Streaming pipelines like this can be fiddly to debug after the fact. If you run one in production,
+    [Logfire](../integrations/logfire.md) can record each validation in the context of the surrounding
+    request, which makes it easier to reconstruct how a given stream was handled.
+
 Partial validation can be enabled when using the three validation methods on `TypeAdapter`: [`TypeAdapter.validate_json()`][pydantic.TypeAdapter.validate_json], [`TypeAdapter.validate_python()`][pydantic.TypeAdapter.validate_python], and [`TypeAdapter.validate_strings()`][pydantic.TypeAdapter.validate_strings]. This allows you to parse and validation incomplete JSON, but also to validate Python objects created by parsing incomplete data of any format.
 
 The `experimental_allow_partial` flag can be passed to these methods to enable partial validation.

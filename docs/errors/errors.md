@@ -34,6 +34,9 @@ The [`ErrorDetails`][pydantic_core.ErrorDetails] object is a dictionary. It cont
 The first item in the [`loc`][pydantic_core.ErrorDetails.loc] list will be the field where the error occurred, and if the field is a
 [sub-model](../concepts/models.md#nested-models), subsequent items will be present to indicate the nested location of the error.
 
+!!! tip "Logfire integration"
+    [Logfire](troubleshooting.md) can be used to record validation errors, with the input that produced it.
+
 As a demonstration:
 
 ```python

@@ -456,6 +456,10 @@ def field_validator(  # noqa: D417
 
     For more in depth examples, see [Field Validators](../concepts/validators.md#field-validators).
 
+    !!! tip "Logfire integration"
+        Instrumentation of validation errors from field validators is supported by [Logfire](../integrations/logfire.md).
+        See [Troubleshooting validation errors](../errors/troubleshooting.md) for more details.
+
     Args:
         *fields: The field names the validator should apply to.
         mode: Specifies whether to validate the fields before or after validation.
@@ -709,6 +713,10 @@ def model_validator(
     ```
 
     For more in depth examples, see [Model Validators](../concepts/validators.md#model-validators).
+
+    !!! tip "Logfire integration"
+        Instrumentation of validation errors from model validators is supported by [Logfire](../integrations/logfire.md).
+        See [Troubleshooting validation errors](../errors/troubleshooting.md) for more details.
 
     Args:
         mode: A required string literal that specifies the validation mode.

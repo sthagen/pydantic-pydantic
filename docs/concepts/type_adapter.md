@@ -91,6 +91,10 @@ handle as fields of a [`BaseModel`][pydantic.main.BaseModel].
     schema. This comes with some non-trivial overhead, so it is recommended to create a `TypeAdapter` for a given type
     just once and reuse it in loops or other performance-critical code.
 
+!!! tip "Logfire integration"
+    As with Pydantic models, the [Logfire integration](../integrations/logfire.md) records
+    validation errors for type adapters.
+
 ## Rebuilding a `TypeAdapter`'s schema
 
 /// version-added | v2.10

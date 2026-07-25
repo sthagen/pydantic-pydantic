@@ -4,6 +4,11 @@
 If you don't want to use Pydantic's [`BaseModel`][pydantic.BaseModel] you can instead get the same data validation
 on standard [dataclasses][dataclasses].
 
+!!! tip "Logfire integration"
+    Because a Pydantic dataclass validates its inputs just like a model, the same observability applies: if
+    you use [Logfire](../integrations/logfire.md), validations of Pydantic dataclasses are
+    [recorded alongside model validations](../errors/troubleshooting.md), input included.
+
 ```python
 from datetime import datetime
 

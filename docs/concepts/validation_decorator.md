@@ -403,6 +403,10 @@ Currently upon validation failure, a standard Pydantic [`ValidationError`][pydan
 (see [model error handling](models.md#error-handling) for details). This is also true for missing required arguments,
 where Python normally raises a [`TypeError`][].
 
+!!! tip "Logfire integration"
+    As with Pydantic models, the [Logfire integration](../integrations/logfire.md) records
+    validation errors for [`@validate_call`][pydantic.validate_call].
+
 ### Performance
 
 We've made a big effort to make Pydantic as performant as possible. While the inspection of the decorated
