@@ -218,7 +218,7 @@ jobs:
       - name: Install rust stable
         id: rust-toolchain
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           components: llvm-tools
           toolchain: stable
@@ -308,7 +308,7 @@ jobs:
 
       - name: Install rust nightly
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: nightly
 
@@ -443,7 +443,7 @@ jobs:
 
       - name: Install rust stable
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
 
@@ -485,7 +485,7 @@ jobs:
 
       - name: Install rust MSRV
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: ${{ steps.resolve-msrv.outputs.MSRV }}
 
@@ -528,7 +528,7 @@ jobs:
 
       - name: Install rust stable
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
 
