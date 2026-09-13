@@ -236,6 +236,9 @@ def apply_each_item_validators(
     if schema['type'] == 'nullable':
         schema['schema'] = apply_each_item_validators(schema['schema'], each_item_validators)
         return schema
+    elif schema['type'] == 'missing-sentinel' and 'schema' in schema:
+        schema['schema'] = apply_each_item_validators(schema['schema'], each_item_validators)
+        return schema
     elif schema['type'] == 'tuple':
         if (variadic_item_index := schema.get('variadic_item_index')) is not None:
             schema['items_schema'][variadic_item_index] = apply_validators(
@@ -524,13 +527,10 @@ class GenerateSchema:
                 original_schema.update(js_updates)
                 return json_schema
 
-            # we don't want to add the missing to the schema if it's the default one
-            default_missing = getattr(enum_type._missing_, '__func__', None) is Enum._missing_.__func__  # pyright: ignore[reportFunctionMemberAccess]
             enum_schema = core_schema.enum_schema(
                 enum_type,
                 cases,
                 sub_type=sub_type,
-                missing=None if default_missing else enum_type._missing_,
                 ref=enum_ref,
                 metadata={'pydantic_js_functions': [get_json_schema]},
             )
@@ -653,29 +653,7 @@ class GenerateSchema:
         return schema
 
     def _deque_schema(self, items_type: Any) -> CoreSchema:
-        from ._serializers import serialize_sequence_via_list
-        from ._validators import deque_validator
-
-        item_type_schema = self.generate_schema(items_type)
-
-        # we have to use a lax list schema here, because we need to validate the deque's
-        # items via a list schema, but it's ok if the deque itself is not a list
-        list_schema = core_schema.list_schema(item_type_schema, strict=False)
-
-        check_instance = core_schema.json_or_python_schema(
-            json_schema=list_schema,
-            python_schema=core_schema.is_instance_schema(collections.deque, cls_repr='Deque'),
-        )
-
-        lax_schema = core_schema.no_info_wrap_validator_function(deque_validator, list_schema)
-
-        return core_schema.lax_or_strict_schema(
-            lax_schema=lax_schema,
-            strict_schema=core_schema.chain_schema([check_instance, lax_schema]),
-            serialization=core_schema.wrap_serializer_function_ser_schema(
-                serialize_sequence_via_list, schema=item_type_schema, info_arg=True
-            ),
-        )
+        return core_schema.deque_schema(self.generate_schema(items_type))
 
     def _mapping_schema(self, tp: Any, keys_type: Any, values_type: Any) -> CoreSchema:
         from ._validators import MAPPING_ORIGIN_MAP, defaultdict_validator, get_defaultdict_default_default_factory
@@ -1344,13 +1322,20 @@ class GenerateSchema:
         args = self._get_args_resolving_forward_refs(union_type, required=True)
         choices: list[CoreSchema] = []
         nullable = False
+        allow_missing = False
         for arg in args:
             if arg is None or arg is NoneType:
                 nullable = True
+            elif arg is MISSING:
+                allow_missing = True
             else:
                 choices.append(self.generate_schema(arg))
 
-        if len(choices) == 1:
+        if not choices:
+            # Only `None` and `MISSING` were present in the union (e.g. `None | MISSING`):
+            s = core_schema.none_schema()
+            nullable = False
+        elif len(choices) == 1:
             s = choices[0]
         else:
             choices_with_tags: list[CoreSchema | tuple[CoreSchema, str]] = []
@@ -1364,6 +1349,8 @@ class GenerateSchema:
 
         if nullable:
             s = core_schema.nullable_schema(s)
+        if allow_missing:
+            s = core_schema.missing_sentinel_schema(s)
         return s
 
     def _type_alias_type_schema(self, obj: TypeAliasType) -> CoreSchema:
@@ -2352,47 +2339,12 @@ class GenerateSchema:
                 schema['schema'] = inner
             return schema
 
-        if schema['type'] == 'union' and any(
-            choice['type'] == 'missing-sentinel' for choice in core_schema.iter_union_choices(schema)
-        ):
-            # Same behavior as for nullable schemas. This is a bit gross, but we have to support the same pattern
-            filtered_choices = [
-                choice
-                for choice in schema['choices']
-                if (choice[0] if isinstance(choice, tuple) else choice)['type'] != 'missing-sentinel'
-            ]
-            if len(filtered_choices) >= 2:
-                # e.g. `Annotated[int | str | MISSING, Constraint(...)]`. We apply `Constraint(...)` to `int | str`,
-                # and create a new union semantically equivalent to `Annotated[int | str, Constraint(...)] | MISSING`:
-                filtered_union = core_schema.union_schema(filtered_choices)
-                filtered_union = self._apply_single_annotation(filtered_union, metadata)
-                new_union = schema.copy()
-                new_union['choices'] = [
-                    filtered_union,
-                    next(
-                        choice
-                        for choice in schema['choices']
-                        if (choice[0] if isinstance(choice, tuple) else choice)['type'] == 'missing-sentinel'
-                    ),
-                ]
-                return new_union
-            elif len(filtered_choices) == 1:
-                # e.g. `Annotated[int | MISSING, Constraint(...)]`. We apply `Constraint(...)` to `int`, and reconstruct
-                # a new union preserving the order.
-                inner = filtered_choices[0][0] if isinstance(filtered_choices[0], tuple) else filtered_choices[0]
-                inner = self._apply_single_annotation(inner, metadata)
-
-                # Create a new union schema, preserving the order of the union:
-                new_union = schema.copy()
-                new_union['choices'] = [
-                    (inner, choice[1])
-                    if isinstance(choice, tuple) and choice[0]['type'] != 'missing-sentinel'
-                    else inner
-                    if not isinstance(choice, tuple) and choice['type'] != 'missing-sentinel'
-                    else choice
-                    for choice in schema['choices']
-                ]
-                return new_union
+        if schema['type'] == 'missing-sentinel' and (inner := schema.get('schema')) is not None:
+            # Same behavior as for nullable schemas: metadata is automatically applied to the inner schema
+            inner = self._apply_single_annotation(inner, metadata)
+            if inner:
+                schema['schema'] = inner
+            return schema
 
         original_schema = schema
         ref = schema.get('ref')

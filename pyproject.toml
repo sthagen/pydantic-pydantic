@@ -44,10 +44,10 @@ classifiers = [
 ]
 requires-python = '>=3.10'
 dependencies = [
-    'typing-extensions>=4.15.0',
+    'typing-extensions>=4.16.0',
     'annotated-types>=0.6.0',
     # Keep this in sync with the version in the `check_pydantic_core_version()` function:
-    'pydantic-core==2.48.0',
+    'pydantic-core==2.49.0',
     'typing-inspection>=0.4.4',
 ]
 dynamic = ['version', 'readme']
@@ -308,4 +308,4 @@ enableExperimentalFeatures = true
 skip = '.git,env*,pydantic/v1/*,uv.lock'
 # `ser` - abbreviation for "ser"ialisation
 # `crate` - a rust crate
-ignore-words-list = 'gir,ser,crate,deques'
+ignore-words-list = 'gir,ser,crate,deques,nam'

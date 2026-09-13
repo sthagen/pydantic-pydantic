@@ -88,6 +88,11 @@ all_schema_functions = [
     ),
     (core_schema.literal_schema, args(['a', 'b']), {'type': 'literal', 'expected': ['a', 'b']}),
     (core_schema.missing_sentinel_schema, args(), {'type': 'missing-sentinel'}),
+    (
+        core_schema.missing_sentinel_schema,
+        args({'type': 'int'}),
+        {'type': 'missing-sentinel', 'schema': {'type': 'int'}},
+    ),
     (core_schema.ellipsis_schema, args(), {'type': 'ellipsis'}),
     (
         core_schema.enum_schema,
@@ -98,6 +103,12 @@ all_schema_functions = [
     (core_schema.callable_schema, args(), {'type': 'callable'}),
     (core_schema.list_schema, args(), {'type': 'list'}),
     (core_schema.list_schema, args({'type': 'int'}), {'type': 'list', 'items_schema': {'type': 'int'}}),
+    (core_schema.deque_schema, args(), {'type': 'deque'}),
+    (
+        core_schema.deque_schema,
+        args({'type': 'int'}, min_length=1),
+        {'type': 'deque', 'items_schema': {'type': 'int'}, 'min_length': 1},
+    ),
     (core_schema.tuple_schema, args([]), {'type': 'tuple', 'items_schema': []}),
     (
         core_schema.set_schema,
@@ -416,3 +427,11 @@ def test_deprecation_warning() -> None:
         match='The `field_name` argument on `with_info_before_validator_function` is deprecated'
     ):
         core_schema.with_info_before_validator_function(val_function, schema={'type': 'int'}, field_name='foo')
+
+
+def test_enum_schema_missing_deprecation_warning() -> None:
+    class MyEnum(Enum):
+        a = 1
+
+    with pytest.deprecated_call(match=r'The `missing` argument on `enum_schema\(\)` is deprecated and no longer used'):
+        core_schema.enum_schema(MyEnum, list(MyEnum.__members__.values()), missing=MyEnum._missing_)

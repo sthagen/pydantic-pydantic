@@ -700,6 +700,27 @@ except ValidationError as exc:
     #> 'default_factory_not_called'
 ```
 
+## `deque_type`
+
+This error is raised when the input value's type is not valid for a [`deque`][collections.deque] field:
+
+```python
+from collections import deque
+
+from pydantic import BaseModel, ValidationError
+
+
+class Model(BaseModel):
+    x: deque[int]
+
+
+try:
+    Model(x=1)
+except ValidationError as exc:
+    print(repr(exc.errors()[0]['type']))
+    #> 'deque_type'
+```
+
 ## `dict_type`
 
 This error is raised when the input value's type is not `dict` for a `dict` field:
@@ -1493,12 +1514,10 @@ except ValidationError as exc:
 
 ## `missing_sentinel_error`
 
-This error is raised when the experimental `MISSING` sentinel is the only value allowed, and wasn't
-provided during validation:
+This error is raised when the `MISSING` sentinel is the only value allowed, and wasn't provided during validation:
 
 ```python
-from pydantic import BaseModel, ValidationError
-from pydantic.experimental.missing_sentinel import MISSING
+from pydantic import MISSING, BaseModel, ValidationError
 
 
 class Model(BaseModel):

@@ -92,6 +92,7 @@ nav:
       - Welcome to Pydantic: index.md
       - Why use Pydantic: why.md
       - Help with Pydantic: help_with_pydantic.md
+      - Enterprise Support: enterprise-support.md
       - Installation: install.md
       - Migration Guide: migration.md
       - Version Policy: version-policy.md
@@ -167,6 +168,7 @@ nav:
       - Databases: examples/orms.md
       - Custom Validators: examples/custom_validators.md
       - Dynamic models: examples/dynamic_models.md
+      - Cyclic references: examples/cyclic_references.md
       - Agent libraries – Pydantic AI: examples/pydantic_ai.md
   - Error Messages:
       - Error Handling: errors/errors.md

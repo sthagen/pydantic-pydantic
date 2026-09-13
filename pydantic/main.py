@@ -31,7 +31,7 @@ from typing import (
 import pydantic_core
 import typing_extensions
 from pydantic_core import PydanticUndefined, ValidationError
-from typing_extensions import Self, Sentinel, TypeAlias, Unpack
+from typing_extensions import Self, Sentinel, TypeAlias, TypeForm, Unpack
 
 from . import PydanticDeprecatedSince20, PydanticDeprecatedSince211
 from ._internal import (
@@ -643,7 +643,7 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
         )
 
     @classmethod
-    def model_parametrized_name(cls, params: tuple[type[Any], ...]) -> str:
+    def model_parametrized_name(cls, params: tuple[TypeForm[Any], ...]) -> str:
         """Compute the class name for parametrizations of generic classes.
 
         This method can be overridden to achieve a custom naming scheme for generic BaseModels.
@@ -711,16 +711,12 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
 
             cls.__pydantic_complete__ = False
 
-            for attr in ('__pydantic_core_schema__', '__pydantic_validator__', '__pydantic_serializer__'):
-                if attr in cls.__dict__ and not isinstance(
-                    getattr(cls, attr), (_mock_val_ser.MockCoreSchema, _mock_val_ser.MockValSer)
-                ):
-                    # Deleting the validator/serializer is necessary as otherwise they can get reused in
-                    # pydantic-core. Same applies for the core schema that can be reused in schema generation.
-                    # We do so only if they aren't mock instances, otherwise concurrent reads of these attributes
-                    # — performed without holding the rebuild lock (e.g. when instantiating the model) — can
-                    # resolve them from the parent class.
-                    delattr(cls, attr)
+            if already_complete:
+                # The existing validator/serializer must not be reused in pydantic-core, and the core schema
+                # must not be reused in schema generation. If the model is already complete (i.e. `force=True`),
+                # we set back mocks for the model (we could also delete the complete core schema/validator/serializer,
+                # but this isn't thread-safe).
+                _mock_val_ser.set_model_mocks(cls)
 
             if _types_namespace is not None:
                 rebuild_ns = _types_namespace
@@ -969,7 +965,7 @@ class BaseModel(metaclass=_model_construction.ModelMetaclass):
         """
 
     def __class_getitem__(
-        cls, typevar_values: type[Any] | tuple[type[Any], ...]
+        cls, typevar_values: TypeForm[Any] | tuple[TypeForm[Any], ...]
     ) -> type[BaseModel] | _forward_ref.PydanticRecursiveRef:
         cached = _generics.get_cached_generic_type_early(cls, typevar_values)
         if cached is not None:
@@ -1779,7 +1775,7 @@ def create_model(
     __validators__: dict[str, Callable[..., Any]] | None = None,
     __cls_kwargs__: dict[str, Any] | None = None,
     __qualname__: str | None = None,
-    **field_definitions: Any | tuple[Any, Any],
+    **field_definitions: TypeForm[Any] | tuple[TypeForm[Any], Any],
 ) -> type[BaseModel]: ...
 
 
@@ -1795,7 +1791,7 @@ def create_model(
     __validators__: dict[str, Callable[..., Any]] | None = None,
     __cls_kwargs__: dict[str, Any] | None = None,
     __qualname__: str | None = None,
-    **field_definitions: Any | tuple[Any, Any],
+    **field_definitions: TypeForm[Any] | tuple[TypeForm[Any], Any],
 ) -> type[ModelT]: ...
 
 
@@ -1810,8 +1806,7 @@ def create_model(  # noqa: C901
     __validators__: dict[str, Callable[..., Any]] | None = None,
     __cls_kwargs__: dict[str, Any] | None = None,
     __qualname__: str | None = None,
-    # TODO PEP 747: replace `Any` by the TypeForm:
-    **field_definitions: Any | tuple[Any, Any],
+    **field_definitions: TypeForm[Any] | tuple[TypeForm[Any], Any],
 ) -> type[ModelT]:
     """!!! abstract "Usage Documentation"
         [Dynamic Model Creation](../concepts/models.md#dynamic-model-creation)

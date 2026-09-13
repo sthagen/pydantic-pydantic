@@ -13,7 +13,7 @@ from itertools import islice
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, TypeVar
 
 from pydantic_core import PydanticUndefined, PydanticUndefinedType, core_schema
-from typing_extensions import Self, is_typeddict
+from typing_extensions import Self, TypeForm, is_typeddict
 
 from ..errors import PydanticUserError
 from . import _type_refs
@@ -106,7 +106,7 @@ class FieldSerializerDecoratorInfo:
     decorator_repr: ClassVar[str] = '@field_serializer'
     fields: tuple[str, ...]
     mode: Literal['plain', 'wrap']
-    return_type: Any
+    return_type: TypeForm[Any]
     when_used: core_schema.WhenUsed
     check_fields: bool | None
 
@@ -126,7 +126,7 @@ class ModelSerializerDecoratorInfo:
 
     decorator_repr: ClassVar[str] = '@model_serializer'
     mode: Literal['plain', 'wrap']
-    return_type: Any
+    return_type: TypeForm[Any]
     when_used: core_schema.WhenUsed
 
 
@@ -535,7 +535,12 @@ def _decorator_infos_for_class(
     res = DecoratorInfos()
     to_replace: list[tuple[str, Any]] = []
 
-    for var_name, var_value in vars(typ).items():
+    # Iterate on the vars with a copy to avoid changes in dictionary size during iteration.
+    # This can happen if a concurrent thread has Pydantic processing the same `typ` (e.g. two
+    # concurrent threads doing `TypeAdapter(SomeClassType)`), and such thread reads annotations
+    # for the first time during the iteration here in the other thread (since 3.14, reading annotations
+    # can set attributes such as `__annotations_cache__` or `__annotate_func__` to the type).
+    for var_name, var_value in vars(typ).copy().items():
         if isinstance(var_value, PydanticDescriptorProxy):
             info = var_value.decorator_info
             if isinstance(info, ValidatorDecoratorInfo):
