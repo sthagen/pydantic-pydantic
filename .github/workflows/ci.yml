@@ -218,7 +218,7 @@ jobs:
       - name: Install rust stable
         id: rust-toolchain
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           components: llvm-tools
           toolchain: stable
@@ -315,7 +315,7 @@ jobs:
 
       - name: Install rust nightly
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: nightly
 
@@ -450,7 +450,7 @@ jobs:
 
       - name: Install rust stable
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
 
@@ -492,7 +492,7 @@ jobs:
 
       - name: Install rust MSRV
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: ${{ steps.resolve-msrv.outputs.MSRV }}
 
@@ -535,7 +535,7 @@ jobs:
 
       - name: Install rust stable
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
 
@@ -576,7 +576,7 @@ jobs:
 
       - name: Install rust stable
         # no release versioning, see https://github.com/dtolnay/rust-toolchain/issues/180
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
 
