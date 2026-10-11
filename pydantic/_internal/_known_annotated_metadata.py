@@ -43,12 +43,13 @@ SEQUENCE_CONSTRAINTS = {*LENGTH_CONSTRAINTS, *FAIL_FAST}
 
 FLOAT_CONSTRAINTS = {*NUMERIC_CONSTRAINTS, *ALLOW_INF_NAN, *STRICT}
 DECIMAL_CONSTRAINTS = {'max_digits', 'decimal_places', *FLOAT_CONSTRAINTS}
-FRACTION_CONSTRAINTS = {*INEQUALITY, *STRICT}
+FRACTION_CONSTRAINTS = {*NUMERIC_CONSTRAINTS, *STRICT}
 INT_CONSTRAINTS = {*NUMERIC_CONSTRAINTS, *STRICT}
 BOOL_CONSTRAINTS = STRICT
 UUID_CONSTRAINTS = STRICT
 
 DATE_TIME_CONSTRAINTS = {*INEQUALITY, *STRICT}
+TIMEDELTA_CONSTRAINTS = {*NUMERIC_CONSTRAINTS, *STRICT}
 LAX_OR_STRICT_CONSTRAINTS = STRICT
 ENUM_CONSTRAINTS = STRICT
 COMPLEX_CONSTRAINTS = STRICT
@@ -76,7 +77,8 @@ constraint_schema_pairings: list[tuple[set[str], tuple[str, ...]]] = [
     (GENERATOR_CONSTRAINTS, ('generator',)),
     (FLOAT_CONSTRAINTS, ('float',)),
     (INT_CONSTRAINTS, ('int',)),
-    (DATE_TIME_CONSTRAINTS, ('date', 'time', 'datetime', 'timedelta')),
+    (DATE_TIME_CONSTRAINTS, ('date', 'time', 'datetime')),
+    (TIMEDELTA_CONSTRAINTS, ('timedelta',)),
     (STRICT, ('typed-dict', 'model')),
     (UNION_CONSTRAINTS, ('union',)),
     (URL_CONSTRAINTS, ('url', 'multi-host-url')),
@@ -262,8 +264,12 @@ def apply_known_metadata(annotation: Any, schema: CoreSchema) -> CoreSchema | No
             else:
                 js_constraint_key = constraint
 
+            validator_kwargs = {constraint: value}
+            if constraint == 'decimal_places' and schema_update.get('max_digits') is not None:
+                # The whole digits limit depends on both constraints, and is checked alongside `decimal_places`:
+                validator_kwargs['max_digits'] = schema_update['max_digits']
             schema = cs.no_info_after_validator_function(
-                partial(NUMERIC_VALIDATOR_LOOKUP[constraint], **{constraint: value}), schema
+                partial(NUMERIC_VALIDATOR_LOOKUP[constraint], **validator_kwargs), schema
             )
             metadata = schema.get('metadata', {})
             if (existing_json_schema_updates := metadata.get('pydantic_js_updates')) is not None:
